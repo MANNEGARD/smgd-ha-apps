@@ -1,0 +1,30 @@
+configuration:
+  api_url:
+    name: API address
+    description: The address of the SMGD Developer Lab API (https://…/functions/v1/api). Shown under Devices → Add bridge.
+  bridge_name:
+    name: Bridge name
+    description: The name shown in SMGD Developer Lab.
+  log_level:
+    name: Log level
+    description: How much is written to the log. Secrets are never printed, whatever the level.
+  allowed_networks:
+    name: Allowed networks
+    description: Networks (CIDR, e.g. 192.168.1.0/24) in which the bridge may reach devices. Empty = all private networks. Addresses outside the list are always refused, even when the cloud asks for them.
+  esphome_ota_enabled:
+    name: ESP OTA enabled
+    description: Whether the bridge may update ESPHome devices over the network.
+  max_concurrent_jobs:
+    name: Max concurrent jobs
+    description: How many devices the bridge works on at once (never more than one job per device).
+  download_hosts:
+    name: Extra download hosts
+    description: Normally not needed. Host names, besides the API's own, that apps and firmware may be downloaded from.
+  gateway_internet_enabled:
+    name: Internet for test sessions
+    description: >-
+      Lets a test session in SMGD Developer Lab ("internet the way the TV has it") make the app's internet requests through this bridge, so they leave from your home network. Only public addresses are reached this way – never anything inside the home network – and every host is logged. Off by default.
+  esphome_builder_sync:
+    name: Sync with ESPHome Device Builder
+    description: >-
+      Keeps the devices in ESPHome Device Builder and the ESP32 projects in SMGD Developer Lab the same, in both directions. The bridge then reads and writes the device files in Home Assistant's config/esphome folder. The values in secrets.yaml never leave Home Assistant, and a file with a password written out is not uploaded. Off by default.

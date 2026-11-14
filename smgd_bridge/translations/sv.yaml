@@ -1,0 +1,30 @@
+configuration:
+  api_url:
+    name: API-adress
+    description: Adressen till SMGD Developer Labs API (https://…/functions/v1/api). Den visas under Enheter → Lägg till brygga.
+  bridge_name:
+    name: Bryggans namn
+    description: Namnet som visas i SMGD Developer Lab.
+  log_level:
+    name: Loggnivå
+    description: Hur mycket som skrivs i loggen. Hemligheter skrivs aldrig ut, oavsett nivå.
+  allowed_networks:
+    name: Tillåtna nätverk
+    description: Nätverk (CIDR, t.ex. 192.168.1.0/24) som bryggan får nå enheter i. Tom lista = alla privata nätverk. Adresser utanför listan vägras alltid, även om molnet ber om dem.
+  esphome_ota_enabled:
+    name: ESP OTA aktiverat
+    description: Om bryggan får uppdatera ESPHome-enheter över nätverket.
+  max_concurrent_jobs:
+    name: Max samtidiga jobb
+    description: Hur många enheter bryggan arbetar mot samtidigt (alltid högst ett jobb per enhet).
+  download_hosts:
+    name: Extra nedladdningsvärdar
+    description: Behövs normalt inte. Värdnamn, utöver API:ts egna, som appar och firmware får hämtas från.
+  gateway_internet_enabled:
+    name: Internet för testsessioner
+    description: >-
+      Låter en testsession i SMGD Developer Lab (”Internet som på TV:n”) göra appens internetanrop genom den här bryggan, så att de lämnar ditt hemnät. Bara publika adresser nås den vägen – aldrig något i hemnätet – och varje värd loggas. Av som standard.
+  esphome_builder_sync:
+    name: Synk med ESPHome Device Builder
+    description: >-
+      Håller enheterna i ESPHome Device Builder och ESP32-projekten i SMGD Developer Lab lika, åt båda håll. Bryggan läser och skriver då enhetsfilerna i Home Assistants mapp config/esphome. Värdena i secrets.yaml lämnar aldrig Home Assistant, och en fil med lösenord i klartext laddas inte upp. Av som standard.

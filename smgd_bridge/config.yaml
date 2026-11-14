@@ -1,0 +1,48 @@
+name: SMGD Bridge
+version: "0.1.0"
+slug: smgd_bridge
+description: Lokal agent för SMGD Developer Lab – installerar appar på LG webOS-TV och uppdaterar ESPHome-enheter i hemnätverket.
+url: https://github.com/SMGD-MP/smgd-ha-apps/blob/main/smgd_bridge/DOCS.md
+arch:
+  - amd64
+  - aarch64
+# Prebuilt image, published by .github/workflows/release-bridge.yml. `{arch}` is filled in by Home Assistant.
+image: ghcr.io/smgd-mp/smgd-bridge-{arch}
+startup: application
+boot: auto
+# Read-only use of Home Assistant's API: the device registry (to confirm firmware versions after an
+# update) and, for Test Lab sessions an administrator approved, the LAN Gateway.
+homeassistant_api: true
+# Not requested: no ports, no host network, no privileges, no Supervisor API, no Docker socket.
+hassio_api: false
+host_network: false
+# Home Assistant's configuration folder, read and write. Needed for one thing only: the optional
+# sync with ESPHome Device Builder, which keeps its device files in the `esphome` folder there and
+# offers no API to other apps. Home Assistant cannot share just that sub-folder. The bridge does
+# not touch the folder unless `esphome_builder_sync` is turned on, and then only the device files
+# directly in `esphome/` – never `secrets.yaml` values, never anything else in the folder.
+map:
+  - type: homeassistant_config
+    read_only: false
+    path: /homeassistant
+options:
+  api_url: null
+  bridge_name: SMGD Bridge
+  log_level: info
+  allowed_networks: []
+  esphome_ota_enabled: true
+  gateway_internet_enabled: false
+  esphome_builder_sync: false
+  max_concurrent_jobs: 2
+schema:
+  api_url: url
+  bridge_name: str
+  log_level: list(debug|info|warn|error)
+  allowed_networks:
+    - str
+  esphome_ota_enabled: bool
+  gateway_internet_enabled: bool
+  esphome_builder_sync: bool
+  max_concurrent_jobs: int(1,8)
+  download_hosts:
+    - str?
