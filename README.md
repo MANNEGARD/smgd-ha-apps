@@ -1,0 +1,1 @@
+# smgd-ha-apps
