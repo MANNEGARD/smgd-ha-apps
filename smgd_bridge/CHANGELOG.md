@@ -1,5 +1,12 @@
 # Ändringslogg
 
+## 0.1.3
+
+- Synk med ESPHome Device Builder: lokala komponentmappar som en enhetsfil bygger från
+  (`external_components` med lokal källa) följer nu med till projektet, så att enheten kan byggas i
+  molnet. Bara mappar som en enhetsfil pekar ut läses; länkar följs aldrig, och filer som ser ut att
+  innehålla privata nycklar laddas inte upp. Bryggan skriver aldrig i mapparna.
+
 ## 0.1.2
 
 - OTA: firmware utan egen versionsmärkning (t.ex. en fil från ESPHome Device Builder) bekräftas nu
