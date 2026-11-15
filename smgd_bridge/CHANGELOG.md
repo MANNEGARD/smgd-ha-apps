@@ -1,5 +1,12 @@
 # Ändringslogg
 
+## 0.1.2
+
+- OTA: firmware utan egen versionsmärkning (t.ex. en fil från ESPHome Device Builder) bekräftas nu
+  via Home Assistant genom ESPHome-version och byggtid. Bryggan väntar upp till 45 sekunder på att
+  Home Assistant ska visa den nya firmwaren efter omstarten.
+- Tydligare besked om varför en version inte kunde läsas av.
+
 ## 0.1.1
 
 - Synk med ESPHome Device Builder: på begäran från en administratör i SMGD Developer Lab kan
