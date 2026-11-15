@@ -1,5 +1,15 @@
 # Ändringslogg
 
+## 0.1.4
+
+- OTA: enheten hittas i Home Assistant även när namnen skiljer sig i skiftläge, bindestreck och
+  andra skiljetecken ("Sovrum Temp/Humid" och "sovrum-temp-humid"). Finns flera poster med samma
+  namn räknas bara de som ser ut som ESPHome-enheter. När ingen hittas står det i resultatet vad
+  Home Assistant kallar sina ESPHome-enheter.
+
+- webOS: svar från TV:ns systemanrop läses tåligare (flera rader, inledande meddelanden) och begärs
+  en gång till efter en kort paus. Går svaret ändå inte att läsa står det i felet vad TV:n svarade.
+
 ## 0.1.3
 
 - Synk med ESPHome Device Builder: lokala komponentmappar som en enhetsfil bygger från
