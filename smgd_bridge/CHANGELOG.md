@@ -1,5 +1,13 @@
 # Ändringslogg
 
+## 0.1.1
+
+- Synk med ESPHome Device Builder: på begäran från en administratör i SMGD Developer Lab kan
+  bryggan flytta lösenord och nycklar som står i klartext i en enhetsfil till Device Builders
+  `secrets.yaml` och lämna `!secret` på raden. Värdena lämnar aldrig bryggan; befintliga rader i
+  `secrets.yaml` ändras inte.
+- Avbilden för aarch64 byggs utan emulerad `npm`.
+
 ## 0.1.0
 
 Första versionen.

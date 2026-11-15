@@ -28,3 +28,7 @@ configuration:
     name: Sync with ESPHome Device Builder
     description: >-
       Keeps the devices in ESPHome Device Builder and the ESP32 projects in SMGD Developer Lab the same, in both directions. The bridge then reads and writes the device files in Home Assistant's config/esphome folder. The values in secrets.yaml never leave Home Assistant, and a file with a password written out is not uploaded. Off by default.
+  esphome_builder_share_secrets:
+    name: Share secrets with SMGD Developer Lab
+    description: >-
+      Lets an administrator in SMGD Developer Lab fetch the values of the secrets (!secret) a synced device uses, from Device Builder's secrets.yaml into that project's secrets, so the project can be built in the cloud. The values then leave your home network and are stored encrypted. Only secrets a synced device file uses can be fetched. Requires the sync above. Off by default.

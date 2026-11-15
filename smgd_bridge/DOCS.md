@@ -12,6 +12,7 @@ från molnet över en utgående HTTPS-anslutning och utför dem lokalt:
 | Test Lab | Släpper igenom anrop till lokala tjänster som en administratör har godkänt (LAN Gateway) |
 | Test Lab, internet (valfritt, av som standard) | Gör en testsessions internetanrop från hemnätet – bara till publika adresser, aldrig till något lokalt |
 | ESPHome Device Builder (valfritt, av som standard) | Håller enhetsfilerna i `config/esphome` och ESP32-projekten i SMGD Developer Lab lika, åt båda håll |
+| Hemligheter i Device Builder (valfritt, av som standard) | På begäran av en administratör: flyttar lösenord i klartext till `secrets.yaml` (lokalt), och – bara om **Dela hemligheter med SMGD Developer Lab** är påslaget – lämnar ut värdena för de hemligheter en synkad enhet använder |
 
 Bryggan kompilerar aldrig något och kör aldrig fria kommandon. Den utför bara en fast uppsättning
 åtgärder, mot enheter som är registrerade i SMGD Developer Lab **och** ligger i de nätverk du

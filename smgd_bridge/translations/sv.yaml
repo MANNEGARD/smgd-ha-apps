@@ -27,4 +27,8 @@ configuration:
   esphome_builder_sync:
     name: Synk med ESPHome Device Builder
     description: >-
-      Håller enheterna i ESPHome Device Builder och ESP32-projekten i SMGD Developer Lab lika, åt båda håll. Bryggan läser och skriver då enhetsfilerna i Home Assistants mapp config/esphome. Värdena i secrets.yaml lämnar aldrig Home Assistant, och en fil med lösenord i klartext laddas inte upp. Av som standard.
+      Håller enheterna i ESPHome Device Builder och ESP32-projekten i SMGD Developer Lab lika, åt båda håll. Bryggan läser och skriver då enhetsfilerna i Home Assistants mapp config/esphome. Värdena i secrets.yaml lämnar inte Home Assistant om du inte slår på inställningen nedan, och en fil med lösenord i klartext laddas inte upp. Av som standard.
+  esphome_builder_share_secrets:
+    name: Dela hemligheter med SMGD Developer Lab
+    description: >-
+      Låter en administratör i SMGD Developer Lab hämta värdena för de hemligheter (!secret) som en synkad enhet använder, från Device Builders secrets.yaml till projektets hemligheter, så att projektet kan byggas i molnet. Värdena lämnar då ditt hemnät och lagras krypterat. Bara hemligheter som en synkad enhetsfil använder kan hämtas. Kräver att synken ovan är påslagen. Av som standard.
