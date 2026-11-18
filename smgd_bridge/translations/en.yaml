@@ -20,6 +20,14 @@ configuration:
   download_hosts:
     name: Extra download hosts
     description: Normally not needed. Host names, besides the API's own, that apps and firmware may be downloaded from.
+  gateway_enabled:
+    name: LAN Gateway
+    description: >-
+      Lets a test session in SMGD Developer Lab reach services in your home network through this bridge. Which services is decided in Developer Lab, but the gateway is only used when it is turned on here. Off by default.
+  gateway_home_assistant:
+    name: Home Assistant through the gateway
+    description: >-
+      How far a test session may go with Home Assistant: off = not at all, read_only = read approved entities, interactive = also call approved services. What is chosen here is a ceiling; Developer Lab can only be stricter. Requires LAN Gateway to be on.
   gateway_internet_enabled:
     name: Internet for test sessions
     description: >-
@@ -27,8 +35,16 @@ configuration:
   esphome_builder_sync:
     name: Sync with ESPHome Device Builder
     description: >-
-      Keeps the devices in ESPHome Device Builder and the ESP32 projects in SMGD Developer Lab the same, in both directions. The bridge then reads and writes the device files in Home Assistant's config/esphome folder. The values in secrets.yaml never leave Home Assistant, and a file with a password written out is not uploaded. Off by default.
+      Keeps the devices in ESPHome Device Builder and the ESP32 projects in SMGD Developer Lab the same, in both directions. The bridge then reads and writes the device files in Home Assistant's config/esphome folder. The values in secrets.yaml do not leave Home Assistant unless you turn on the setting below, and a file with a password written out is not uploaded. Off by default.
   esphome_builder_share_secrets:
     name: Share secrets with SMGD Developer Lab
     description: >-
       Lets an administrator in SMGD Developer Lab fetch the values of the secrets (!secret) a synced device uses, from Device Builder's secrets.yaml into that project's secrets, so the project can be built in the cloud. The values then leave your home network and are stored encrypted. Only secrets a synced device file uses can be fetched. Requires the sync above. Off by default.
+  vci_enabled:
+    name: VCI
+    description: >-
+      Lets an administrator in SMGD Developer Lab give the bridge VCI jobs: read a Foxwell VCI plugged into this machine's USB port, write its serial number, Bluetooth name and MAC address, switch mode, update firmware and write the key. The bridge does the whole job locally and reports what the device itself answered. There is no terminal on this path – only the fixed jobs. Off by default.
+  vci_serial_port:
+    name: Serial port for the VCI
+    description: >-
+      The port the VCI is on, preferably a path under /dev/serial/by-id (otherwise e.g. /dev/ttyACM0). Required for every VCI job except Find ports: without it the bridge sends nothing to any port, not even when the machine has a single serial port (it may be a Zigbee or Z-Wave stick). The Find ports job lists the ports so that you can pick the right one.

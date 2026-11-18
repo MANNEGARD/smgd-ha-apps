@@ -1,5 +1,37 @@
 # Ändringslogg
 
+## 0.1.5
+
+Säkerhetsuppdatering efter en genomgång av hela plattformen.
+
+- Parkoppling: bryggan signerar sin parkopplingsbegäran med sin egen nyckel. Servern tar inte
+  längre emot en begäran utan signatur, så nya parkopplingar kräver den här versionen. En brygga
+  som redan är parkopplad påverkas inte.
+- LAN Gateway mot Home Assistant: filtret för godkända entiteter och tjänster går inte längre att
+  kringgå med återanvända meddelande-id, annan teckenkodning eller för stora svar. Det som skickas
+  vidare är alltid det bryggan själv kontrollerat.
+- LAN Gateway: Home Assistants interna nätverk (172.30.32.0/23) nås inte via gatewayen om det inte
+  uttryckligen står i `allowed_networks`.
+- Synk med ESPHome Device Builder: lösenord i klartext upptäcks nu även i block-, klammer- och
+  citatform samt på egen rad. Komponentmappar får samma kontroll som enhetsfiler: en `secrets.yaml`
+  eller en YAML-fil med lösenord i klartext laddas aldrig upp.
+- Hämtning av hemligheter (`esphome_builder_share_secrets`): för en fil som Developer Lab själv har
+  skrivit lämnas bara de hemligheter ut som filen hänvisade till innan dess.
+- Anslutningen till relay förnyas löpande; en återkallad brygga kopplas ifrån.
+- **Nya inställningar, av som standard:** `gateway_enabled` (LAN Gateway) och `gateway_home_assistant`
+  (off / read_only / interactive). Molnet kan inte längre slå på åtkomst till hemnätet eller till Home
+  Assistant; det avgörs här. **Använder du LAN Gateway i Test Lab måste du slå på den efter uppdateringen.**
+- **VCI Workshop (ny inställning `vci_enabled`, av som standard):** bryggan kan utföra VCI-jobb lokalt
+  mot en Foxwell VCI i datorns USB-port och via Bluetooth – läs info, skriv serienummer/namn/MAC,
+  byt läge, firmware och nyckel. Ingen terminal den vägen. Appen begär därför åtkomst till
+  serieportar (`uart`) och värdens D-Bus (`host_dbus`); de används inte om inställningen är av.
+  Provat mot en simulerad VCI, inte mot riktig hårdvara.
+- VCI: resultatet av ett jobb sparas i datakatalogen tills servern tagit emot det (även över avbrott
+  och omstart); ett pågående jobb får upp till fem minuter att bli klart innan appen stoppas (`timeout: 300`, det
+  mesta Home Assistant godtar); bryggan öppnar bara
+  den serieport som valdes när jobbet började och gissar inte när det finns flera portar – ange då
+  `vci_serial_port`; en nyckelskrivning står som obekräftad eftersom nyckeln inte kan läsas tillbaka.
+
 ## 0.1.4
 
 - OTA: enheten hittas i Home Assistant även när namnen skiljer sig i skiftläge, bindestreck och

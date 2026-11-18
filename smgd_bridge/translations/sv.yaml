@@ -20,6 +20,14 @@ configuration:
   download_hosts:
     name: Extra nedladdningsvärdar
     description: Behövs normalt inte. Värdnamn, utöver API:ts egna, som appar och firmware får hämtas från.
+  gateway_enabled:
+    name: LAN Gateway
+    description: >-
+      Låter en testsession i SMGD Developer Lab nå tjänster i ditt hemnät genom den här bryggan. Vilka tjänster bestäms i Developer Lab, men gatewayen används bara om den är påslagen här. Av som standard.
+  gateway_home_assistant:
+    name: Home Assistant via gatewayen
+    description: >-
+      Hur långt en testsession får gå mot Home Assistant: off = inte alls, read_only = läsa godkända entiteter, interactive = även anropa godkända tjänster. Det som väljs här är ett tak; Developer Lab kan bara vara strängare. Kräver att LAN Gateway är påslagen.
   gateway_internet_enabled:
     name: Internet för testsessioner
     description: >-
@@ -32,3 +40,11 @@ configuration:
     name: Dela hemligheter med SMGD Developer Lab
     description: >-
       Låter en administratör i SMGD Developer Lab hämta värdena för de hemligheter (!secret) som en synkad enhet använder, från Device Builders secrets.yaml till projektets hemligheter, så att projektet kan byggas i molnet. Värdena lämnar då ditt hemnät och lagras krypterat. Bara hemligheter som en synkad enhetsfil använder kan hämtas. Kräver att synken ovan är påslagen. Av som standard.
+  vci_enabled:
+    name: VCI
+    description: >-
+      Låter en administratör i SMGD Developer Lab ge bryggan VCI-jobb: läsa av en Foxwell VCI som sitter i den här datorns USB-port, skriva serienummer, Bluetooth-namn och MAC-adress, byta läge, uppdatera firmware och skriva nyckel. Bryggan gör hela jobbet lokalt och rapporterar det enheten själv svarat. Det finns ingen terminal den vägen – bara de fasta jobben. Av som standard.
+  vci_serial_port:
+    name: Serieport för VCI
+    description: >-
+      Porten som VCI:n sitter på, helst en sökväg under /dev/serial/by-id (annars t.ex. /dev/ttyACM0). Krävs för alla VCI-jobb utom Leta portar: utan den skickar bryggan ingenting till någon port, inte ens när datorn bara har en serieport (den kan vara en Zigbee- eller Z-Wave-sticka). Jobbet Leta portar listar portarna så att du kan välja rätt.

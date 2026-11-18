@@ -1,21 +1,39 @@
 name: SMGD Bridge
-version: "0.1.4"
+version: "0.1.5"
 slug: smgd_bridge
 description: Lokal agent för SMGD Developer Lab – installerar appar på LG webOS-TV och uppdaterar ESPHome-enheter i hemnätverket.
-url: https://github.com/SMGD-MP/smgd-ha-apps/blob/main/smgd_bridge/DOCS.md
+url: https://github.com/MANNEGARD/smgd-ha-apps/blob/main/smgd_bridge/DOCS.md
 arch:
   - amd64
   - aarch64
 # Prebuilt image, published by .github/workflows/release-bridge.yml. `{arch}` is filled in by Home Assistant.
-image: ghcr.io/smgd-mp/smgd-bridge-{arch}
+image: ghcr.io/mannegard/smgd-bridge-{arch}
 startup: application
 boot: auto
-# Read-only use of Home Assistant's API: the device registry (to confirm firmware versions after an
-# update) and, for Test Lab sessions an administrator approved, the LAN Gateway.
+# How long Home Assistant waits after asking the app to stop before it ends it by force (seconds;
+# the default is 10). The bridge normally stops within a second or two. The long limit is for one
+# case: a VCI job under way (a firmware transfer takes minutes) is allowed to finish, so that a
+# restart or update of the app never cuts off a write to the device half-way. 300 is the most the
+# Supervisor accepts (a larger value makes it skip the whole app when it reads the repository);
+# the bridge's own wait (VCI_STOP_WAIT_MS in apps/bridge/src/bridge.ts) stays below it.
+timeout: 300
+# Home Assistant's API: the device registry (to confirm firmware versions after an update) and, for
+# Test Lab sessions an administrator approved, the LAN Gateway – read only, unless the option
+# `gateway_home_assistant` is `interactive` and an administrator approved individual services.
 homeassistant_api: true
-# Not requested: no ports, no host network, no privileges, no Supervisor API, no Docker socket.
+# Not requested: no ports, no host network, no privileged mode, no Supervisor API, no Docker socket.
 hassio_api: false
 host_network: false
+# For VCI Workshop only (option `vci_enabled`, off by default). A Foxwell VCI is a USB serial device
+# with a Bluetooth module, and the bridge carries out whole jobs against it locally:
+#  - `uart`: access to the host's serial devices (/dev/ttyACM*, /dev/ttyUSB*, /dev/serial/by-id/*),
+#    which is where a VCI plugged into the Home Assistant machine appears.
+#  - `host_dbus`: the host's system D-Bus, which is how BlueZ (the host's Bluetooth) is reached to
+#    set the name and address of the VCI's Bluetooth module over BLE.
+# Home Assistant grants these when the app is installed, whatever the option says; the bridge opens
+# no serial port and makes no D-Bus connection unless `vci_enabled` is turned on.
+uart: true
+host_dbus: true
 # Home Assistant's configuration folder, read and write. Needed for one thing only: the optional
 # sync with ESPHome Device Builder, which keeps its device files in the `esphome` folder there and
 # offers no API to other apps. Home Assistant cannot share just that sub-folder. The bridge does
@@ -33,9 +51,12 @@ options:
   log_level: info
   allowed_networks: []
   esphome_ota_enabled: true
+  gateway_enabled: false
+  gateway_home_assistant: "off"
   gateway_internet_enabled: false
   esphome_builder_sync: false
   esphome_builder_share_secrets: false
+  vci_enabled: false
   max_concurrent_jobs: 2
 schema:
   api_url: url
@@ -44,9 +65,13 @@ schema:
   allowed_networks:
     - str
   esphome_ota_enabled: bool
+  gateway_enabled: bool?
+  gateway_home_assistant: list(off|read_only|interactive)?
   gateway_internet_enabled: bool
   esphome_builder_sync: bool
   esphome_builder_share_secrets: bool?
+  vci_enabled: bool?
+  vci_serial_port: str?
   max_concurrent_jobs: int(1,8)
   download_hosts:
     - str?
