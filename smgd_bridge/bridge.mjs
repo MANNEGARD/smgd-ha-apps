@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.12";
+    BRIDGE_VERSION = "0.1.13";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -39981,6 +39981,13 @@ var BluezCentral = class {
       const notifyPaths = /* @__PURE__ */ new Set([notifyPath, ...charsOfService.filter((c) => c.flags.includes("notify") || c.flags.includes("indicate")).map((c) => c.path)]);
       const short2 = (u) => /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/.test(u) ? u.slice(4, 8) : u.slice(0, 8);
       const notifiedBy = /* @__PURE__ */ new Map();
+      const firstNotifications = [];
+      const describeBytes = (bytes) => {
+        const head = bytes.subarray(0, 24);
+        const printable2 = head.every((b) => b === 13 || b === 10 || b >= 32 && b < 127);
+        const shown = printable2 ? JSON.stringify(new TextDecoder().decode(head)) : Buffer.from(head).toString("hex");
+        return `${bytes.length}B ${printable2 ? "text" : "hex"} ${shown}${bytes.length > head.length ? "\u2026" : ""}`;
+      };
       const counts = { writes: 0, bytes_out: 0, write_errors: 0, notifications: 0, bytes_in: 0, signals_under_device: 0 };
       const rule = `type='signal',sender='${BLUEZ}',path_namespace='${device.path}'`;
       const onMessage = (msg) => {
@@ -39993,6 +40000,7 @@ var BluezCentral = class {
         counts.notifications++;
         counts.bytes_in += bytes.length;
         notifiedBy.set(msg.path, (notifiedBy.get(msg.path) ?? 0) + 1);
+        if (firstNotifications.length < 6) firstNotifications.push(`${short2(charsOfService.find((c) => c.path === msg.path)?.uuid ?? "?")}: ${describeBytes(bytes)}`);
         for (const l of listeners) l(bytes);
       };
       const busCall = (member, r2) => timeout(bus.call(new dbus.Message({ destination: "org.freedesktop.DBus", path: "/org/freedesktop/DBus", interface: "org.freedesktop.DBus", member, signature: "s", body: [r2] })), CALL_TIMEOUT_MS, member);
@@ -40056,6 +40064,7 @@ var BluezCentral = class {
             characteristics: charsOfService.map((c) => `${short2(c.uuid)}[${c.flags.join("|")}]`).join(","),
             notified_by: [...notifiedBy].map(([path, n]) => `${short2(charsOfService.find((c) => c.path === path)?.uuid ?? "?")}=${n}`).join(","),
             notify_errors: notifyErrors.join("; "),
+            first_notifications: firstNotifications,
             write_type: writeType,
             write_flags: writeFlags.join(","),
             notify_flags: notifyFlags.join(","),
@@ -40686,7 +40695,6 @@ async function runVciJob(job, d) {
     session = new VciSession(link, { timings: d.timings, log: sessionLog });
     session.at = new AtEngine(opened1.channel, { log: sessionLog });
     d.log.info(`vci: ${connection.toUpperCase()} link opened`, { peer: opened1.describe });
-    detail.at_engine_was_open = await closeAtEngine(opened1);
     return session;
   };
   const closeAtEngine = async (channel) => {

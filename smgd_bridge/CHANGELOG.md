@@ -1,5 +1,10 @@
 # Ändringslogg
 
+## 0.1.13
+
+- **BLE som i webbläsaren:** inget skickas före protokollets första fråga (AT-stängningen före jobbet är borttagen).
+- Felsökningsuppgifterna visar de första svaren från modulen (vilken kanal, längd och början).
+
 ## 0.1.12
 
 - **BLE: färska GATT-uppgifter.** BlueZ sparar enhetens tjänster från tidigare anslutningar; när de är inaktuella
