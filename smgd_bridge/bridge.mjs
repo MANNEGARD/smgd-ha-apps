@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.8";
+    BRIDGE_VERSION = "0.1.9";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -39952,6 +39952,8 @@ var BluezCentral = class {
       const notifyPath = characteristic(VCI_BLE_NOTIFY);
       const writePath = characteristic(VCI_BLE_WRITE);
       if (!service || !notifyPath || !writePath) throw new VciError("wrong_device", `Enheten ${name} har inte den datakanal (FFF0/FFF1/FFF2) som VCI:ns Bluetooth-modul anv\xE4nder.`);
+      const writeFlags = objects[writePath]?.["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [];
+      const writeType = writeFlags.includes("write") || !writeFlags.includes("write-without-response") ? "request" : "command";
       const listeners = /* @__PURE__ */ new Set();
       const rule = `type='signal',sender='${BLUEZ}',interface='${PROPS}',member='PropertiesChanged',path='${notifyPath}'`;
       const onMessage = (msg) => {
@@ -39978,7 +39980,7 @@ var BluezCentral = class {
         onData: (listener) => void listeners.add(listener),
         write: (bytes) => {
           const run = async () => {
-            const send = (piece) => this.call(writePath, "org.bluez.GattCharacteristic1", "WriteValue", "aya{sv}", [Buffer.from(piece), { type: new dbus.Variant("s", "request") }]);
+            const send = (piece) => this.call(writePath, "org.bluez.GattCharacteristic1", "WriteValue", "aya{sv}", [Buffer.from(piece), { type: new dbus.Variant("s", writeType) }]);
             if (bytes.length > WRITE_CHUNK) {
               try {
                 await send(bytes);
@@ -40281,7 +40283,7 @@ var BluezSpp = class {
         await this.call(device.path, DEV, "Pair", "", [], LONG_CALL_MS);
       } catch (e) {
         if (!/AlreadyExists/i.test(errorText(e))) {
-          throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen utan parkoppling, och parkopplingen misslyckades (${errorText(e).trim().slice(0, 160)}). Kontrollera att enheten \xE4r p\xE5 och inte ansluten till n\xE5got annat, och PIN-koden om den kr\xE4ver en (vci_spp_pin, standard 0000).`);
+          throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen utan parkoppling (${errorText(first).trim().slice(0, 120)}), och parkopplingen misslyckades (${errorText(e).trim().slice(0, 120)}). SPP fungerar bara n\xE4r VCI:n f\xE5r str\xF6m fr\xE5n bilen (OBD). Kontrollera ocks\xE5 att den inte \xE4r ansluten till n\xE5got annat, och PIN-koden om den kr\xE4ver en (vci_spp_pin, standard 0000).`);
         }
       }
       const { dbus } = await this.connectBus();
@@ -40614,7 +40616,36 @@ async function runVciJob(job, d) {
     session = new VciSession(link, { timings: d.timings, log: sessionLog });
     session.at = new AtEngine(opened1.channel, { log: sessionLog });
     d.log.info(`vci: ${connection.toUpperCase()} link opened`, { peer: opened1.describe });
+    detail.at_engine_was_open = await closeAtEngine(opened1);
     return session;
+  };
+  const closeAtEngine = async (channel) => {
+    let closed = false;
+    const decoder3 = new TextDecoder();
+    let text = "";
+    const off = channel.channel.onData((bytes) => {
+      text += decoder3.decode(bytes, { stream: true });
+      if (text.includes("$OK,Closed$")) closed = true;
+    });
+    try {
+      await session?.at?.closeEngine();
+      await new Promise((resolve) => setTimeout(resolve, 400));
+    } catch {
+    } finally {
+      off();
+    }
+    if (closed) d.log.info("vci: the Bluetooth module had its AT engine open; it has been closed");
+    return closed;
+  };
+  const afterAt = async () => {
+    if (overBluetooth && bt) await closeAtEngine(bt);
+  };
+  const probeModule = async (s) => {
+    if (!s.at) return { name: null, mac: null };
+    const name = await s.readBtName().catch(() => null);
+    const mac3 = await s.readMac().catch(() => null);
+    await afterAt();
+    return { name, mac: mac3 };
   };
   const openDevice = () => overBluetooth ? openOverBluetooth() : openUsb();
   const openUsb = async () => {
@@ -40647,6 +40678,12 @@ async function runVciJob(job, d) {
     d.progress({ stage: "reading", percent: null });
     const info = await s.readInfo();
     before = info;
+    if (isSilentDevice(info) && !o.allowSilent && overBluetooth) {
+      const module = await probeModule(s);
+      const moduleAnswered = module.name !== null || module.mac !== null;
+      detail.bluetooth_module = { answered: moduleAnswered, name: module.name, mac: module.mac };
+      throw refuse("timeout", moduleAnswered ? `Bluetooth-modulen svarar \xF6ver ${connection.toUpperCase()}${module.name ? ` (${module.name}${module.mac ? `, ${module.mac}` : ""})` : ""}, men VCI:n bakom den svarar inte p\xE5 protokollet. L\xE4nken fungerar allts\xE5 \u2013 troligen beh\xF6ver VCI:n str\xF6m fr\xE5n bilen (OBD) f\xF6r att svara \xF6ver Bluetooth, som f\xF6r SPP. Inget har skrivits.` : `Varken VCI:n eller dess Bluetooth-modul svarar \xF6ver ${connection.toUpperCase()} (${via2.bt_target ?? "?"}), fast anslutningen \xF6ppnades: inget kommer tillbaka fr\xE5n enheten. Kontrollera att det \xE4r r\xE4tt enhet och att den inte \xE4r ansluten till n\xE5got annat. Inget har skrivits.`);
+    }
     if (isSilentDevice(info) && !o.allowSilent) {
       throw refuse("timeout", overBluetooth ? `Ingen VCI svarar \xF6ver ${connection.toUpperCase()} (${via2.bt_target ?? "?"}) \u2013 varken p\xE5 l\xE4gesfr\xE5gan eller p\xE5 fr\xE5gorna om identitet. Kontrollera att det \xE4r VCI:ns Bluetooth-namn och att enheten \xE4r p\xE5 och inte ansluten till n\xE5got annat. Inget har skrivits.` : "Ingen VCI svarar p\xE5 serieporten \u2013 varken p\xE5 l\xE4gesfr\xE5gan eller p\xE5 fr\xE5gorna om identitet. Kontrollera USB-kabeln och att vci_serial_port \xE4r VCI:ns port. En VCI med \xE4ldre firmware som st\xE5r i BOOT-l\xE4ge kan vara helt tyst; ett firmwarejobb kan d\xE5 best\xE4llas med valet att enheten \xE4r i BOOT-l\xE4ge.");
     }
@@ -40664,6 +40701,7 @@ async function runVciJob(job, d) {
     if (s.at) {
       mac3 = await s.readMac().catch(() => null);
       moduleName = await s.readBtName().catch(() => null);
+      await afterAt();
     }
     if (info.serial !== null && !SERIAL.test(info.serial)) detail.serial_as_reported = info.serial.slice(0, 64);
     if (moduleName !== null && info.bt_name !== null && moduleName !== info.bt_name) detail.bt_name_over_usb = info.bt_name.slice(0, 64);
@@ -40730,6 +40768,7 @@ async function runVciJob(job, d) {
         detail.serial = { acknowledged: written.acknowledged, read_back: written.readBack };
         if (p.set_bt_name) {
           const name = await s.writeBtName(p.serial);
+          await afterAt();
           detail.bt_name = nameWriteDetail(name);
           if (name.status !== "succeeded") {
             throw new Outcome({

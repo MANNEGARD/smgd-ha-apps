@@ -1,5 +1,14 @@
 # Ändringslogg
 
+## 0.1.9
+
+- **BLE:** bryggan stänger Bluetooth-modulens AT-motor innan protokollet körs (en motor som lämnats öppen släpper
+  inte igenom något till VCI:n), och efter AT-kommandon mitt i ett jobb.
+- **Tydligare fel över Bluetooth:** svarar inte VCI:n frågar bryggan modulen själv och säger om länken fungerar men
+  VCI:n bakom är tyst (troligen ström från bilen behövs) eller om inget alls kommer tillbaka.
+- BLE-skrivningar görs med eller utan svar efter vad modulens karakteristik stöder, som i webbläsaren.
+- SPP-felet visar också orsaken till det första försöket.
+
 ## 0.1.8
 
 - **SPP utan PIN:** bryggan ansluter först utan parkoppling (de flesta VCI:er tillåter det). Bara om VCI:n vägrar
