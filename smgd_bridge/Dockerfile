@@ -2,8 +2,6 @@
 # behövs. bridge.mjs är bryggans färdiga paket (esbuild) från MANNEGARD/smgd-developer-lab (apps/bridge), samma
 # version som i config.yaml. Körberoendena hämtas från npm vid bygget: LG:s webOS-CLI, ssh2 och – för den valfria
 # VCI-drivrutinen – serialport och dbus-next. Inga installationsskript körs. Appen öppnar ingen port.
-ARG BUILD_FROM=node:22-alpine
-
 FROM node:22-alpine AS deps
 ARG WEBOS_CLI_VERSION=3.2.6
 ARG SSH2_VERSION=1.17.0
@@ -13,7 +11,9 @@ RUN mkdir -p /app /opt/webos-cli \
  && npm install --prefix /opt/webos-cli --omit=dev --no-audit --no-fund --ignore-scripts "@webos-tools/cli@${WEBOS_CLI_VERSION}" \
  && npm install --prefix /app --omit=dev --omit=optional --no-audit --no-fund --ignore-scripts "ssh2@${SSH2_VERSION}" "serialport@${SERIALPORT_VERSION}" "dbus-next@${DBUS_NEXT_VERSION}"
 
-FROM ${BUILD_FROM}
+# Alltid Node 22 på Alpine – inte BUILD_FROM: Home Assistants egen basavbild (med s6-overlay som init) gav
+# "s6-overlay-suexec: fatal: can only run as pid 1". Ingen ärvd ENTRYPOINT; bryggan startas direkt.
+FROM node:22-alpine
 
 ARG BUILD_VERSION=0.0.0
 
@@ -37,4 +37,5 @@ LABEL io.hass.type="addon" \
       org.opencontainers.image.title="SMGD Bridge" \
       org.opencontainers.image.source="https://github.com/MANNEGARD/smgd-ha-apps"
 
+ENTRYPOINT []
 CMD ["node", "/app/bridge.mjs"]
