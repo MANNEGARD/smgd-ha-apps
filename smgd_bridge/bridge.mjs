@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.6";
+    BRIDGE_VERSION = "0.1.8";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -20754,7 +20754,7 @@ var init_config = __esm({
       vci_enabled: external_exports.boolean().default(false),
       /** The serial port the VCI is on, e.g. /dev/ttyACM0. Not set: the only port under /dev/serial/by-id (with several, none is guessed). */
       vci_serial_port: external_exports.string().max(300).regex(/^\/dev\/[A-Za-z0-9._:+/-]+$/).refine((p) => !p.split("/").includes(".."), "must be a path under /dev").optional(),
-      /** PIN when a VCI is paired for SPP (classic Bluetooth). Feasycom modules use 1234 unless it has been changed. */
+      /** PIN when a VCI is paired for SPP (classic Bluetooth). Feasycom modules use 0000 unless it has been changed. */
       vci_spp_pin: external_exports.string().regex(/^[0-9]{4,16}$/).optional()
     });
     ConfigError = class extends Error {
@@ -40101,7 +40101,7 @@ var BluezSpp = class {
   /** Waiting ConnectProfile calls, by device object path. */
   waiting = /* @__PURE__ */ new Map();
   constructor(o = {}) {
-    this.pin = (o.pin ?? "1234").trim() || "1234";
+    this.pin = (o.pin ?? "0000").trim() || "0000";
   }
   async connectBus() {
     if (this.bus && this.dbus) return { dbus: this.dbus, bus: this.bus };
@@ -40240,23 +40240,9 @@ var BluezSpp = class {
     }
     throw new VciError("disconnected", `Ingen Bluetooth-enhet ${MAC.test(target) ? "med adressen" : "med namnet"} ${target} hittades i n\xE4rheten av bryggan.`);
   }
-  /** Pairs (when needed), connects the serial port profile and returns the RFCOMM link. */
-  async connect(target, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
-    await this.register();
-    const device = await this.locate(target, deadline);
+  /** Connects the serial port profile once and waits for the RFCOMM socket. */
+  async attempt(device, target, deadline) {
     const DEV = "org.bluez.Device1";
-    if (!device.paired) {
-      try {
-        await this.call(device.path, DEV, "Pair", "", [], LONG_CALL_MS);
-      } catch (e) {
-        if (!/AlreadyExists/i.test(errorText(e))) {
-          throw new VciError("disconnected", `Bryggan kunde inte parkoppla ${target} f\xF6r SPP (${errorText(e).trim().slice(0, 160)}). Kontrollera att enheten \xE4r p\xE5 och inte ansluten till n\xE5got annat, och att PIN-koden st\xE4mmer (vci_spp_pin, standard 1234).`);
-        }
-      }
-      const { dbus } = await this.connectBus();
-      await this.call(device.path, "org.freedesktop.DBus.Properties", "Set", "ssv", [DEV, "Trusted", new dbus.Variant("b", true)]).catch(() => void 0);
-    }
     const fdPromise = new Promise((resolve, reject) => {
       this.waiting.set(device.path, resolve);
       setTimeout(() => {
@@ -40270,9 +40256,42 @@ var BluezSpp = class {
       await this.call(device.path, DEV, "ConnectProfile", "s", [SPP_UUID], LONG_CALL_MS);
     } catch (e) {
       this.waiting.delete(device.path);
-      throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen (${errorText(e).trim().slice(0, 160)}).`);
+      fdPromise.catch(() => void 0);
+      throw e;
     }
-    const fd2 = await fdPromise;
+    return fdPromise;
+  }
+  /**
+   * Connects the serial port profile and returns the RFCOMM link. Most VCIs accept a connection without pairing,
+   * so that is tried first. Only when it is refused and the device is not paired is it paired – with the PIN from
+   * vci_spp_pin (standard 0000) if the module asks for one, or "just works" – and the connection tried once more.
+   * BlueZ may also start the pairing itself during the connection; the bridge's agent answers it the same way.
+   */
+  async connect(target, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    await this.register();
+    const device = await this.locate(target, deadline);
+    const DEV = "org.bluez.Device1";
+    let fd2;
+    try {
+      fd2 = await this.attempt(device, target, deadline);
+    } catch (first) {
+      if (device.paired) throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen (${errorText(first).trim().slice(0, 160)}).`);
+      try {
+        await this.call(device.path, DEV, "Pair", "", [], LONG_CALL_MS);
+      } catch (e) {
+        if (!/AlreadyExists/i.test(errorText(e))) {
+          throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen utan parkoppling, och parkopplingen misslyckades (${errorText(e).trim().slice(0, 160)}). Kontrollera att enheten \xE4r p\xE5 och inte ansluten till n\xE5got annat, och PIN-koden om den kr\xE4ver en (vci_spp_pin, standard 0000).`);
+        }
+      }
+      const { dbus } = await this.connectBus();
+      await this.call(device.path, "org.freedesktop.DBus.Properties", "Set", "ssv", [DEV, "Trusted", new dbus.Variant("b", true)]).catch(() => void 0);
+      try {
+        fd2 = await this.attempt(device, target, deadline);
+      } catch (e) {
+        throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen efter parkopplingen (${errorText(e).trim().slice(0, 160)}).`);
+      }
+    }
     return new SppLink(fd2, device.address, async () => {
       await this.call(device.path, DEV, "DisconnectProfile", "s", [SPP_UUID]).catch(() => void 0);
     });

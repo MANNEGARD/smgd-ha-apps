@@ -52,4 +52,4 @@ configuration:
   vci_spp_pin:
     name: PIN-kod för VCI över SPP
     description: >-
-      PIN-koden som bryggan anger när den parkopplar VCI:n för SPP (klassisk Bluetooth). Feasycom-moduler använder 1234 om den inte ändrats. Används bara för jobb med anslutningen SPP.
+      Används bara om VCI:n kräver parkoppling för SPP (klassisk Bluetooth) – bryggan försöker först ansluta utan parkoppling, vilket de flesta VCI:er tillåter. Standard 0000. Används bara för jobb med anslutningen SPP.

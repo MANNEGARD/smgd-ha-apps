@@ -52,4 +52,4 @@ configuration:
   vci_spp_pin:
     name: PIN for VCI over SPP
     description: >-
-      The PIN the bridge gives when it pairs the VCI for SPP (classic Bluetooth). Feasycom modules use 1234 unless it has been changed. Only used for jobs with the SPP connection.
+      Only used if the VCI requires pairing for SPP (classic Bluetooth) – the bridge first tries to connect without pairing, which most VCIs allow. Default 0000. Only used for jobs with the SPP connection.
