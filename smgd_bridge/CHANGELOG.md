@@ -1,5 +1,16 @@
 # Ändringslogg
 
+## 0.1.6
+
+- **VCI över Bluetooth utan USB.** Ett VCI-jobb kan nu köras helt över Bluetooth – med **BLE** (Feasycom-modulens
+  datakanal) eller **SPP** (klassisk Bluetooth, RFCOMM) – mot den enhet du anger i Developer Lab (namn, eller namn
+  eller adress för SPP). Som i webbläsaren går hela protokollet då över Bluetooth-länken; USB behövs inte och
+  `vci_serial_port` behöver inte vara satt. USB fungerar som förut.
+- **SPP:** bryggan parkopplar enheten första gången med sin egen parkopplingsagent. Ny inställning
+  `vci_spp_pin` (PIN-kod vid parkoppling, standard 1234 för Feasycom-moduler).
+- Bryggan rapporterar vilka anslutningar den klarar, så att Developer Lab bara erbjuder dem.
+- Inte provat mot en riktig VCI över Bluetooth: provat mot den simulerade enheten.
+
 ## 0.1.5
 
 Säkerhetsuppdatering efter en genomgång av hela plattformen.

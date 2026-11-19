@@ -48,3 +48,8 @@ configuration:
     name: Serial port for the VCI
     description: >-
       The port the VCI is on, preferably a path under /dev/serial/by-id (otherwise e.g. /dev/ttyACM0). Required for every VCI job except Find ports: without it the bridge sends nothing to any port, not even when the machine has a single serial port (it may be a Zigbee or Z-Wave stick). The Find ports job lists the ports so that you can pick the right one.
+
+  vci_spp_pin:
+    name: PIN for VCI over SPP
+    description: >-
+      The PIN the bridge gives when it pairs the VCI for SPP (classic Bluetooth). Feasycom modules use 1234 unless it has been changed. Only used for jobs with the SPP connection.

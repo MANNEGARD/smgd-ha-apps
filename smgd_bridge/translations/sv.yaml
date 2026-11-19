@@ -48,3 +48,8 @@ configuration:
     name: Serieport för VCI
     description: >-
       Porten som VCI:n sitter på, helst en sökväg under /dev/serial/by-id (annars t.ex. /dev/ttyACM0). Krävs för alla VCI-jobb utom Leta portar: utan den skickar bryggan ingenting till någon port, inte ens när datorn bara har en serieport (den kan vara en Zigbee- eller Z-Wave-sticka). Jobbet Leta portar listar portarna så att du kan välja rätt.
+
+  vci_spp_pin:
+    name: PIN-kod för VCI över SPP
+    description: >-
+      PIN-koden som bryggan anger när den parkopplar VCI:n för SPP (klassisk Bluetooth). Feasycom-moduler använder 1234 om den inte ändrats. Används bara för jobb med anslutningen SPP.

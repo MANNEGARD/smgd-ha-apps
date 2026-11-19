@@ -20656,6 +20656,7 @@ function loadConfig(env = process.env) {
     esphome_builder_share_secrets: raw.esphome_builder_share_secrets ?? (fromEnv("SMGD_ESPHOME_BUILDER_SHARE_SECRETS") ? /^(1|true|yes|on)$/i.test(fromEnv("SMGD_ESPHOME_BUILDER_SHARE_SECRETS")) : void 0),
     vci_enabled: raw.vci_enabled ?? (fromEnv("SMGD_VCI_ENABLED") ? /^(1|true|yes|on)$/i.test(fromEnv("SMGD_VCI_ENABLED")) : void 0),
     // an empty field in the app configuration means "find the port", not "a port with no name"
+    vci_spp_pin: (typeof raw.vci_spp_pin === "string" && raw.vci_spp_pin.trim() !== "" ? raw.vci_spp_pin.trim() : void 0) ?? fromEnv("SMGD_VCI_SPP_PIN"),
     vci_serial_port: (typeof raw.vci_serial_port === "string" && raw.vci_serial_port.trim() !== "" ? raw.vci_serial_port.trim() : void 0) ?? fromEnv("SMGD_VCI_SERIAL_PORT")
   };
   for (const key of ["allowed_networks", "download_hosts"]) if (Array.isArray(merged[key]) && merged[key].length === 0) delete merged[key];
@@ -20690,6 +20691,7 @@ function loadConfig(env = process.env) {
     esphomeBuilderShareSecrets: o.esphome_builder_sync && o.esphome_builder_share_secrets,
     vciEnabled: o.vci_enabled,
     vciSerialPort: o.vci_serial_port ?? null,
+    vciSppPin: o.vci_spp_pin ?? null,
     aresBinDir: existsSync(`${aresDir}/ares-install`) ? aresDir : null,
     homeAssistant: supervisor ? { url: fromEnv("SMGD_HA_URL") ?? "http://supervisor/core/api", wsUrl: fromEnv("SMGD_HA_WS_URL") ?? "ws://supervisor/core/websocket", token: supervisor } : null,
     devMode,
@@ -20702,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.5";
+    BRIDGE_VERSION = "0.1.6";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -20751,7 +20753,9 @@ var init_config = __esm({
        */
       vci_enabled: external_exports.boolean().default(false),
       /** The serial port the VCI is on, e.g. /dev/ttyACM0. Not set: the only port under /dev/serial/by-id (with several, none is guessed). */
-      vci_serial_port: external_exports.string().max(300).regex(/^\/dev\/[A-Za-z0-9._:+/-]+$/).refine((p) => !p.split("/").includes(".."), "must be a path under /dev").optional()
+      vci_serial_port: external_exports.string().max(300).regex(/^\/dev\/[A-Za-z0-9._:+/-]+$/).refine((p) => !p.split("/").includes(".."), "must be a path under /dev").optional(),
+      /** PIN when a VCI is paired for SPP (classic Bluetooth). Feasycom modules use 1234 unless it has been changed. */
+      vci_spp_pin: external_exports.string().regex(/^[0-9]{4,16}$/).optional()
     });
     ConfigError = class extends Error {
     };
@@ -31816,7 +31820,7 @@ var require_websocket_server = __commonJS({
 });
 
 // src/main.ts
-import { existsSync as existsSync5, readFileSync as readFileSync3 } from "node:fs";
+import { existsSync as existsSync6, readFileSync as readFileSync3 } from "node:fs";
 import { join as join6 } from "node:path";
 
 // src/bridge.ts
@@ -33048,7 +33052,8 @@ var BridgeCapabilities = external_exports.object({
    * VCI Workshop (0.1.5+): whether the person running the bridge has turned VCI jobs on, and what the
    * bridge can reach right now. Absent = no VCI (older bridges, or turned off).
    */
-  vci: external_exports.object({ enabled: external_exports.boolean(), serial_port: external_exports.boolean(), bluetooth: external_exports.boolean() }).optional(),
+  // transports: the connections the bridge can run a job over (0.1.6+); absent = USB only (older bridges)
+  vci: external_exports.object({ enabled: external_exports.boolean(), serial_port: external_exports.boolean(), bluetooth: external_exports.boolean(), transports: external_exports.array(external_exports.enum(["usb", "ble", "spp"])).max(3).optional() }).optional(),
   max_concurrent_jobs: external_exports.number().int().min(1).max(8),
   allowed_networks: external_exports.array(external_exports.string()).max(32),
   platform: external_exports.string().max(64)
@@ -34646,26 +34651,34 @@ var Serial3 = external_exports.string().regex(/^[A-Za-z0-9]{1,32}$/);
 var Serial13 = external_exports.string().regex(/^[A-Za-z0-9]{13}$/);
 var Mac2 = external_exports.string().regex(/^[0-9A-F]{12}$/);
 var Short2 = external_exports.string().max(64);
+var VCI_CONNECTIONS = ["usb", "ble", "spp"];
+var BtTarget = external_exports.string().trim().min(1).max(64).regex(/^[^ -]+$/);
+var VIA = { connection: external_exports.enum(VCI_CONNECTIONS).default("usb"), bt_target: BtTarget.optional() };
+var via = (shape) => external_exports.object({ ...shape, ...VIA }).superRefine((v, ctx) => {
+  const o = v;
+  if (o.connection !== "usb" && !o.bt_target) ctx.addIssue({ code: "custom", path: ["bt_target"], message: "Ange vilken Bluetooth-enhet jobbet g\xE4ller." });
+  if (o.connection === "usb" && o.bt_target) ctx.addIssue({ code: "custom", path: ["bt_target"], message: "En Bluetooth-enhet anges bara f\xF6r BLE eller SPP." });
+});
 var VciJobParams = {
   scan: external_exports.object({}),
-  read_info: external_exports.object({ bluetooth: external_exports.boolean().default(true) }),
+  read_info: via({ bluetooth: external_exports.boolean().default(true) }),
   /** Writes the serial number and, unless turned off, gives the Bluetooth module the same name. */
-  write_serial: external_exports.object({ serial: Serial13, set_bt_name: external_exports.boolean().default(true) }),
-  write_mac: external_exports.object({ mac: Mac2 }),
-  switch_mode: external_exports.object({ target: external_exports.enum(["boot", "app"]) }),
+  write_serial: via({ serial: Serial13, set_bt_name: external_exports.boolean().default(true) }),
+  write_mac: via({ mac: Mac2 }),
+  switch_mode: via({ target: external_exports.enum(["boot", "app"]) }),
   /**
    * `allow_type_mismatch` (D2): write although the device reports another type, or none (it does not
    * answer the type question, e.g. in BOOT) – recorded as `detail.type_mismatch_override`.
    * `device_in_boot`: the administrator says a device that answers nothing at all (not even the mode
    * read) is a VCI stuck in BOOT; without it such a port is refused, as it may be another device.
    */
-  firmware_update: external_exports.object({ firmware_id: Uuid, allow_type_mismatch: external_exports.boolean().default(false), device_in_boot: external_exports.boolean().default(false) }),
+  firmware_update: via({ firmware_id: Uuid, allow_type_mismatch: external_exports.boolean().default(false), device_in_boot: external_exports.boolean().default(false) }),
   /** The device the key is for is named by the administrator and checked by the bridge before anything is sent. */
-  secret_key: external_exports.object({ device_serial: Serial3, confirm: external_exports.literal(true) }),
+  secret_key: via({ device_serial: Serial3, confirm: external_exports.literal(true) }),
   /** D1: BOOT → SET_VCI_TYPE (0C 05) → APP → read the type back. */
-  write_vci_type: external_exports.object({ vci_type: VciIdentityText }),
+  write_vci_type: via({ vci_type: VciIdentityText }),
   /** D1: BOOT → SET_VERSION (03 05) → APP → read the version back. */
-  write_version: external_exports.object({ version: VciIdentityText })
+  write_version: via({ version: VciIdentityText })
 };
 var VciJobCreate = external_exports.object({
   bridge_id: Uuid,
@@ -40007,8 +40020,329 @@ var BluezCentral = class {
   }
 };
 
+// src/drivers/vci/bluez-spp.ts
+import { close as closeFd, existsSync as existsSync3, read as readFd, write as writeFd } from "node:fs";
+import { promisify } from "node:util";
+var BLUEZ2 = "org.bluez";
+var SPP_UUID = "00001101-0000-1000-8000-00805f9b34fb";
+var PROFILE_PATH = "/se/smgd/bridge/spp";
+var AGENT_PATH = "/se/smgd/bridge/agent";
+var CALL_TIMEOUT_MS2 = 2e4;
+var LONG_CALL_MS = 45e3;
+var READ_CHUNK = 1024;
+var readAsync = promisify(readFd);
+var writeAsync = (fd2, buf, off, len) => new Promise((resolve, reject) => writeFd(fd2, buf, off, len, null, (e, n) => e ? reject(e) : resolve(n)));
+var closeQuietly = (fd2) => new Promise((resolve) => closeFd(fd2, () => resolve()));
+var sleep4 = (ms) => new Promise((r2) => setTimeout(r2, ms));
+var timeout2 = (p, ms, what) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`${what}: no answer from BlueZ`)), ms).unref())]);
+var errorText = (e) => `${e instanceof Error ? `${e.name} ${e.message}` : String(e)} ${e?.type ?? ""}`;
+var MAC = /^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$/;
+function matchesTarget(target, device) {
+  const t = target.trim();
+  if (MAC.test(t)) return device.address.toUpperCase() === t.toUpperCase();
+  return device.name === t || device.alias === t;
+}
+var SppLink = class {
+  listeners = /* @__PURE__ */ new Set();
+  open = true;
+  fd;
+  address;
+  onClose;
+  constructor(fd2, address, onClose) {
+    this.fd = fd2;
+    this.address = address;
+    this.onClose = onClose;
+    void this.readLoop();
+  }
+  get isOpen() {
+    return this.open;
+  }
+  async readLoop() {
+    const buf = Buffer.alloc(READ_CHUNK);
+    while (this.open) {
+      let n = 0;
+      try {
+        n = await readAsync(this.fd, buf, 0, READ_CHUNK, null);
+      } catch {
+        break;
+      }
+      if (n <= 0) break;
+      const bytes = new Uint8Array(buf.subarray(0, n));
+      for (const l of this.listeners) l(bytes);
+    }
+    this.open = false;
+  }
+  async write(bytes) {
+    if (!this.open) throw new VciError("disconnected", "SPP-anslutningen till enheten \xE4r st\xE4ngd.");
+    try {
+      let off = 0;
+      while (off < bytes.length) off += await writeAsync(this.fd, bytes, off, bytes.length - off);
+    } catch (e) {
+      this.open = false;
+      throw new VciError("disconnected", `SPP-skrivningen misslyckades (${(e instanceof Error ? e.message : String(e)).slice(0, 200)}).`);
+    }
+  }
+  onData(listener) {
+    this.listeners.add(listener);
+  }
+  async close() {
+    if (!this.open && this.listeners.size === 0) return;
+    this.open = false;
+    this.listeners.clear();
+    await closeQuietly(this.fd);
+    await this.onClose().catch(() => void 0);
+  }
+};
+var BluezSpp = class {
+  dbus = null;
+  bus = null;
+  registered = false;
+  pin;
+  /** Waiting ConnectProfile calls, by device object path. */
+  waiting = /* @__PURE__ */ new Map();
+  constructor(o = {}) {
+    this.pin = (o.pin ?? "1234").trim() || "1234";
+  }
+  async connectBus() {
+    if (this.bus && this.dbus) return { dbus: this.dbus, bus: this.bus };
+    const socket = systemBusSocket();
+    if (!existsSync3(socket)) throw new Error(`the system D-Bus socket ${socket} is not there (host_dbus is not granted to the app?)`);
+    const mod = await import("dbus-next");
+    const dbus = mod.default ?? mod;
+    if (!process.env.DBUS_SYSTEM_BUS_ADDRESS) process.env.DBUS_SYSTEM_BUS_ADDRESS = `unix:path=${socket}`;
+    const bus = dbus.systemBus({ negotiateUnixFd: true });
+    bus.on("error", () => {
+      if (this.bus === bus) {
+        this.bus = null;
+        this.registered = false;
+      }
+    });
+    this.dbus = dbus;
+    this.bus = bus;
+    return { dbus, bus };
+  }
+  async call(path, iface, member, signature = "", body = [], ms = CALL_TIMEOUT_MS2) {
+    const { dbus, bus } = await this.connectBus();
+    const reply = await timeout2(bus.call(new dbus.Message({ destination: BLUEZ2, path, interface: iface, member, signature, body })), ms, member);
+    return reply?.body ?? [];
+  }
+  async objects() {
+    return (await this.call("/", "org.freedesktop.DBus.ObjectManager", "GetManagedObjects"))[0] ?? {};
+  }
+  /** Exports the profile and the pairing agent on the bridge's own D-Bus connection and registers them with BlueZ. */
+  async register() {
+    if (this.registered) return;
+    const { dbus, bus } = await this.connectBus();
+    const { Interface } = dbus.interface;
+    const pin = this.pin;
+    const deliver = (device, fd2) => {
+      const resolve = this.waiting.get(device);
+      if (!resolve) return false;
+      this.waiting.delete(device);
+      resolve(fd2);
+      return true;
+    };
+    class Profile2 extends Interface {
+      Release() {
+      }
+      NewConnection(device, fd2) {
+        if (!deliver(device, fd2)) void closeQuietly(fd2);
+      }
+      RequestDisconnection() {
+      }
+    }
+    Profile2.configureMembers({
+      methods: {
+        Release: { inSignature: "", outSignature: "" },
+        NewConnection: { inSignature: "oha{sv}", outSignature: "" },
+        RequestDisconnection: { inSignature: "o", outSignature: "" }
+      }
+    });
+    class Agent extends Interface {
+      Release() {
+      }
+      RequestPinCode() {
+        return pin;
+      }
+      RequestPasskey() {
+        return Number.parseInt(pin, 10) || 0;
+      }
+      DisplayPasskey() {
+      }
+      DisplayPinCode() {
+      }
+      RequestConfirmation() {
+      }
+      RequestAuthorization() {
+      }
+      AuthorizeService() {
+      }
+      Cancel() {
+      }
+    }
+    Agent.configureMembers({
+      methods: {
+        Release: { inSignature: "", outSignature: "" },
+        RequestPinCode: { inSignature: "o", outSignature: "s" },
+        RequestPasskey: { inSignature: "o", outSignature: "u" },
+        DisplayPasskey: { inSignature: "ouq", outSignature: "" },
+        DisplayPinCode: { inSignature: "os", outSignature: "" },
+        RequestConfirmation: { inSignature: "ou", outSignature: "" },
+        RequestAuthorization: { inSignature: "o", outSignature: "" },
+        AuthorizeService: { inSignature: "os", outSignature: "" },
+        Cancel: { inSignature: "", outSignature: "" }
+      }
+    });
+    bus.export(PROFILE_PATH, new Profile2("org.bluez.Profile1"));
+    bus.export(AGENT_PATH, new Agent("org.bluez.Agent1"));
+    const V = dbus.Variant;
+    await this.call("/org/bluez", "org.bluez.ProfileManager1", "RegisterProfile", "osa{sv}", [
+      PROFILE_PATH,
+      SPP_UUID,
+      { Name: new V("s", "SMGD VCI SPP"), Role: new V("s", "client"), AutoConnect: new V("b", false), RequireAuthentication: new V("b", false), RequireAuthorization: new V("b", false) }
+    ]).catch((e) => {
+      if (!/AlreadyExists/i.test(errorText(e))) throw e;
+    });
+    await this.call("/org/bluez", "org.bluez.AgentManager1", "RegisterAgent", "os", [AGENT_PATH, "KeyboardDisplay"]).catch((e) => {
+      if (!/AlreadyExists/i.test(errorText(e))) throw e;
+    });
+    this.registered = true;
+  }
+  find(objects, target) {
+    for (const [path, ifaces] of Object.entries(objects)) {
+      const dev = ifaces["org.bluez.Device1"];
+      if (!dev) continue;
+      const device = { address: String(dev.Address?.value ?? ""), name: String(dev.Name?.value ?? ""), alias: String(dev.Alias?.value ?? "") };
+      if (matchesTarget(target, device)) return { path, address: device.address, paired: dev.Paired?.value === true };
+    }
+    return null;
+  }
+  /** The device, discovering classic and BLE devices until it shows up or the time is up. */
+  async locate(target, deadline) {
+    const known = this.find(await this.objects(), target);
+    if (known) return known;
+    const objects = await this.objects();
+    const adapter = Object.keys(objects).sort().find((p) => objects[p]?.["org.bluez.Adapter1"]?.Powered?.value === true) ?? Object.keys(objects).sort().find((p) => objects[p]?.["org.bluez.Adapter1"]);
+    if (!adapter) throw new VciError("disconnected", "BlueZ rapporterar ingen Bluetooth-adapter p\xE5 datorn som k\xF6r bryggan.");
+    const { dbus } = await this.connectBus();
+    await this.call(adapter, "org.bluez.Adapter1", "SetDiscoveryFilter", "a{sv}", [{ Transport: new dbus.Variant("s", "auto") }]).catch(() => void 0);
+    await this.call(adapter, "org.bluez.Adapter1", "StartDiscovery").catch((e) => {
+      if (!/InProgress/i.test(errorText(e))) throw e;
+    });
+    try {
+      while (Date.now() < deadline) {
+        const found = this.find(await this.objects(), target);
+        if (found) return found;
+        await sleep4(1e3);
+      }
+    } finally {
+      await this.call(adapter, "org.bluez.Adapter1", "StopDiscovery").catch(() => void 0);
+    }
+    throw new VciError("disconnected", `Ingen Bluetooth-enhet ${MAC.test(target) ? "med adressen" : "med namnet"} ${target} hittades i n\xE4rheten av bryggan.`);
+  }
+  /** Pairs (when needed), connects the serial port profile and returns the RFCOMM link. */
+  async connect(target, timeoutMs) {
+    const deadline = Date.now() + timeoutMs;
+    await this.register();
+    const device = await this.locate(target, deadline);
+    const DEV = "org.bluez.Device1";
+    if (!device.paired) {
+      try {
+        await this.call(device.path, DEV, "Pair", "", [], LONG_CALL_MS);
+      } catch (e) {
+        if (!/AlreadyExists/i.test(errorText(e))) {
+          throw new VciError("disconnected", `Bryggan kunde inte parkoppla ${target} f\xF6r SPP (${errorText(e).trim().slice(0, 160)}). Kontrollera att enheten \xE4r p\xE5 och inte ansluten till n\xE5got annat, och att PIN-koden st\xE4mmer (vci_spp_pin, standard 1234).`);
+        }
+      }
+      const { dbus } = await this.connectBus();
+      await this.call(device.path, "org.freedesktop.DBus.Properties", "Set", "ssv", [DEV, "Trusted", new dbus.Variant("b", true)]).catch(() => void 0);
+    }
+    const fdPromise = new Promise((resolve, reject) => {
+      this.waiting.set(device.path, resolve);
+      setTimeout(() => {
+        if (this.waiting.get(device.path) === resolve) {
+          this.waiting.delete(device.path);
+          reject(new VciError("timeout", `SPP-anslutningen till ${target} kom aldrig fram fr\xE5n BlueZ.`));
+        }
+      }, Math.max(1e3, deadline - Date.now())).unref();
+    });
+    try {
+      await this.call(device.path, DEV, "ConnectProfile", "s", [SPP_UUID], LONG_CALL_MS);
+    } catch (e) {
+      this.waiting.delete(device.path);
+      throw new VciError("disconnected", `Enheten ${target} tog inte emot SPP-anslutningen (${errorText(e).trim().slice(0, 160)}).`);
+    }
+    const fd2 = await fdPromise;
+    return new SppLink(fd2, device.address, async () => {
+      await this.call(device.path, DEV, "DisconnectProfile", "s", [SPP_UUID]).catch(() => void 0);
+    });
+  }
+  async close() {
+    const bus = this.bus;
+    this.bus = null;
+    this.registered = false;
+    if (!bus) return;
+    try {
+      bus.disconnect();
+    } catch {
+    }
+  }
+};
+var SppChannel = class {
+  listeners = /* @__PURE__ */ new Set();
+  link = null;
+  spp;
+  target;
+  constructor(spp, target) {
+    this.spp = spp;
+    this.target = target;
+  }
+  get address() {
+    return this.link?.address ?? null;
+  }
+  async connect(timeoutMs) {
+    const link = await this.spp.connect(this.target, timeoutMs);
+    link.onData((bytes) => {
+      if (this.link !== link) return;
+      for (const l of this.listeners) l(bytes);
+    });
+    this.link = link;
+  }
+  async write(bytes) {
+    if (!this.link?.isOpen) throw new VciError("disconnected", "SPP \xE4r inte anslutet till enheten.");
+    await this.link.write(bytes);
+  }
+  onData(listener) {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+  /** After a restart of the device (mode switch): connect the profile again until it answers or the time is up. */
+  async reconnect(timeoutMs) {
+    const old = this.link;
+    this.link = null;
+    await old?.close().catch(() => void 0);
+    const deadline = Date.now() + timeoutMs;
+    for (; ; ) {
+      const left = deadline - Date.now();
+      if (left <= 0) return false;
+      try {
+        await this.connect(Math.min(left, 2e4));
+        return true;
+      } catch {
+        await sleep4(Math.min(1500, Math.max(0, deadline - Date.now())));
+      }
+    }
+  }
+  async close() {
+    const old = this.link;
+    this.link = null;
+    this.listeners.clear();
+    await old?.close().catch(() => void 0);
+  }
+};
+
 // src/drivers/vci/serial.ts
-import { existsSync as existsSync3, readdirSync } from "node:fs";
+import { existsSync as existsSync4, readdirSync } from "node:fs";
 var SERIAL_BY_ID_DIR = "/dev/serial/by-id";
 function listSerialPorts(configured, byIdDir = SERIAL_BY_ID_DIR) {
   let found = [];
@@ -40018,7 +40352,7 @@ function listSerialPorts(configured, byIdDir = SERIAL_BY_ID_DIR) {
   }
   if (configured) {
     const others = found.filter((p) => p !== configured);
-    return [...existsSync3(configured) ? [{ path: configured, selected: true }] : [], ...others.map((path) => ({ path, selected: false }))];
+    return [...existsSync4(configured) ? [{ path: configured, selected: true }] : [], ...others.map((path) => ({ path, selected: false }))];
   }
   return found.map((path) => ({ path, selected: false }));
 }
@@ -40041,14 +40375,14 @@ var SerialChannel = class {
     const before = new Set(this.othersAtOpen ?? []);
     return {
       serial_port: this.path.slice(0, 300),
-      serial_port_present: existsSync3(this.path),
+      serial_port_present: existsSync4(this.path),
       serial_port_reopened: this.reconnects,
       serial_ports_appeared: this.othersAtOpen === null ? [] : this.others().filter((p) => p !== this.path && !before.has(p)).slice(0, 8).map((p) => p.slice(0, 300))
     };
   }
   async open() {
     const path = this.path;
-    if (!existsSync3(path)) throw new VciError("disconnected", `Serieporten ${path} finns inte. \xC4r VCI:n ansluten med USB till datorn som k\xF6r bryggan?`);
+    if (!existsSync4(path)) throw new VciError("disconnected", `Serieporten ${path} finns inte. \xC4r VCI:n ansluten med USB till datorn som k\xF6r bryggan?`);
     this.othersAtOpen ??= this.others();
     const { SerialPort } = await import("serialport");
     const port = new SerialPort({ path, baudRate: 115200, dataBits: 8, stopBits: 1, parity: "none", rtscts: false, xon: false, xoff: false, autoOpen: false });
@@ -40116,6 +40450,7 @@ var SerialChannel = class {
 var BLUETOOTH_PROBE_TTL_MS = 5 * 6e4;
 function systemTransports(o) {
   const central = o.central ?? new BluezCentral();
+  let spp = null;
   const ports = () => listSerialPorts(o.serialPort, o.serialByIdDir);
   let bluetooth = null;
   const bluetoothState = async (fresh = false) => {
@@ -40123,7 +40458,7 @@ function systemTransports(o) {
     return bluetooth;
   };
   return {
-    probe: async () => ({ serial_port: ports().some((p) => p.selected), bluetooth: (await bluetoothState()).ok }),
+    probe: async () => ({ serial_port: ports().some((p) => p.selected), bluetooth: (await bluetoothState()).ok, transports: ["usb", "ble", "spp"] }),
     listSerialPorts: async () => ports(),
     openSerial: async () => {
       if (!o.serialPort) {
@@ -40151,6 +40486,14 @@ function systemTransports(o) {
       const channel = new BleChannel(central, name);
       await channel.connect(2e4);
       return { channel, describe: `${name} (${channel.address ?? "?"})`, close: () => channel.close() };
+    },
+    openSpp: async (target) => {
+      const state = await bluetoothState(true);
+      if (!state.ok) throw new VciError("disconnected", `Bluetooth \xE4r inte tillg\xE4ngligt p\xE5 datorn som k\xF6r bryggan${state.detail ? ` (${state.detail})` : ""}.`);
+      spp ??= new BluezSpp({ pin: o.sppPin });
+      const channel = new SppChannel(spp, target);
+      await channel.connect(3e4);
+      return { channel, describe: `SPP ${target} (${channel.address ?? "?"})`, close: () => channel.close() };
     }
   };
 }
@@ -40237,6 +40580,24 @@ async function runVciJob(job, d) {
     };
   };
   if (!parsed.success) return finish({ status: "failed", error_code: "protocol_mismatch", error_message: "Jobbets parametrar har ett format som bryggan inte k\xE4nner igen.", detail: { sent_to_device: false } });
+  const via2 = parsed.success ? parsed.data : {};
+  const connection = via2.connection ?? "usb";
+  const overBluetooth = connection !== "usb";
+  if (overBluetooth) detail.connection = connection;
+  const openOverBluetooth = async () => {
+    const target = via2.bt_target ?? "";
+    d.progress({ stage: "connecting", percent: null });
+    if (connection === "spp" && !d.transports.openSpp) throw refuse("protocol_unsupported", "Bryggan kan inte ansluta med SPP p\xE5 den h\xE4r datorn. Inget har skickats.");
+    const opened1 = connection === "spp" ? await d.transports.openSpp(target) : await d.transports.openBluetooth(target);
+    opened.push(opened1);
+    bt = opened1;
+    link = new VciLink(opened1.channel, { log: sessionLog, channelName: "bt" });
+    session = new VciSession(link, { timings: d.timings, log: sessionLog });
+    session.at = new AtEngine(opened1.channel, { log: sessionLog });
+    d.log.info(`vci: ${connection.toUpperCase()} link opened`, { peer: opened1.describe });
+    return session;
+  };
+  const openDevice = () => overBluetooth ? openOverBluetooth() : openUsb();
   const openUsb = async () => {
     d.progress({ stage: "connecting", percent: null });
     const usb = await d.transports.openSerial();
@@ -40247,6 +40608,7 @@ async function runVciJob(job, d) {
     return session;
   };
   const openBt = async (s, name) => {
+    if (overBluetooth && bt) return bt;
     const usbMac = await s.readMacOverUsb().catch(() => null);
     bt = await d.transports.openBluetooth(name);
     opened.push(bt);
@@ -40267,7 +40629,7 @@ async function runVciJob(job, d) {
     const info = await s.readInfo();
     before = info;
     if (isSilentDevice(info) && !o.allowSilent) {
-      throw refuse("timeout", "Ingen VCI svarar p\xE5 serieporten \u2013 varken p\xE5 l\xE4gesfr\xE5gan eller p\xE5 fr\xE5gorna om identitet. Kontrollera USB-kabeln och att vci_serial_port \xE4r VCI:ns port. En VCI med \xE4ldre firmware som st\xE5r i BOOT-l\xE4ge kan vara helt tyst; ett firmwarejobb kan d\xE5 best\xE4llas med valet att enheten \xE4r i BOOT-l\xE4ge.");
+      throw refuse("timeout", overBluetooth ? `Ingen VCI svarar \xF6ver ${connection.toUpperCase()} (${via2.bt_target ?? "?"}) \u2013 varken p\xE5 l\xE4gesfr\xE5gan eller p\xE5 fr\xE5gorna om identitet. Kontrollera att det \xE4r VCI:ns Bluetooth-namn och att enheten \xE4r p\xE5 och inte ansluten till n\xE5got annat. Inget har skrivits.` : "Ingen VCI svarar p\xE5 serieporten \u2013 varken p\xE5 l\xE4gesfr\xE5gan eller p\xE5 fr\xE5gorna om identitet. Kontrollera USB-kabeln och att vci_serial_port \xE4r VCI:ns port. En VCI med \xE4ldre firmware som st\xE5r i BOOT-l\xE4ge kan vara helt tyst; ett firmwarejobb kan d\xE5 best\xE4llas med valet att enheten \xE4r i BOOT-l\xE4ge.");
     }
     if (isSilentDevice(info)) return info;
     if (info.mode !== "app" && !(o.allowBoot && info.mode === "boot")) {
@@ -40316,7 +40678,7 @@ async function runVciJob(job, d) {
       }
       case "read_info": {
         const p = parsed.data;
-        const s = await openUsb();
+        const s = await openDevice();
         const info = await readFirst(s, { allowBoot: true });
         if (p.bluetooth) {
           if (!info.bt_name) detail.bluetooth = { connected: false, reason: "Enheten uppgav inget Bluetooth-namn \xF6ver USB." };
@@ -40333,7 +40695,7 @@ async function runVciJob(job, d) {
       }
       case "write_serial": {
         const p = parsed.data;
-        const s = await openUsb();
+        const s = await openDevice();
         const info = await readFirst(s);
         if (p.set_bt_name) {
           if (!info.bt_name) throw refuse("wrong_device", "Enheten uppgav inget Bluetooth-namn \xF6ver USB, s\xE5 det g\xE5r inte att veta vilken Bluetooth-enhet som \xE4r r\xE4tt. Inget har skrivits.");
@@ -40371,7 +40733,7 @@ async function runVciJob(job, d) {
       }
       case "write_mac": {
         const p = parsed.data;
-        const s = await openUsb();
+        const s = await openDevice();
         const info = await readFirst(s);
         if (!info.bt_name) throw refuse("wrong_device", "Enheten uppgav inget Bluetooth-namn \xF6ver USB, s\xE5 det g\xE5r inte att veta vilken Bluetooth-enhet som \xE4r r\xE4tt. Inget har skrivits.");
         const channel = await openBt(s, info.bt_name);
@@ -40390,7 +40752,7 @@ async function runVciJob(job, d) {
       }
       case "switch_mode": {
         const p = parsed.data;
-        const s = await openUsb();
+        const s = await openDevice();
         const info = await s.readInfo();
         before = info;
         d.progress({ stage: "restarting", percent: null });
@@ -40419,7 +40781,7 @@ async function runVciJob(job, d) {
         }
         if (file2.vciType !== fw.vci_type || file2.version !== fw.version) throw refuse("bad_file", `Filen s\xE4ger ${file2.vciType} ${file2.version}, men biblioteket anger ${fw.vci_type} ${fw.version}. Filen anv\xE4nds inte.`);
         detail.file = { vci_type: file2.vciType, version: file2.version, sha256: fw.sha256, chunks: file2.chunks };
-        const s = await openUsb();
+        const s = await openDevice();
         const info = await readFirst(s, { allowBoot: true, allowSilent: p.device_in_boot });
         const mismatch = info.product_type !== file2.vciType;
         if (mismatch && !p.allow_type_mismatch) {
@@ -40450,7 +40812,7 @@ async function runVciJob(job, d) {
       case "secret_key": {
         const p = parsed.data;
         if (!job.secret_key) throw refuse("protocol_mismatch", "Jobbet saknar nyckelpaket.");
-        const s = await openUsb();
+        const s = await openDevice();
         const info = await readFirst(s);
         if (info.serial !== p.device_serial) throw refuse("wrong_device", `Den anslutna enheten uppger ${info.serial ? `serienummer ${info.serial}` : "inget serienummer"}, inte ${p.device_serial}. Nyckeln har inte skickats.`);
         let blocks;
@@ -40481,7 +40843,7 @@ async function runVciJob(job, d) {
       }
       case "write_vci_type": {
         const p = parsed.data;
-        const s = await openUsb();
+        const s = await openDevice();
         await readFirst(s, { allowBoot: true });
         d.progress({ stage: "writing", percent: null });
         acting();
@@ -40489,7 +40851,7 @@ async function runVciJob(job, d) {
       }
       case "write_version": {
         const p = parsed.data;
-        const s = await openUsb();
+        const s = await openDevice();
         await readFirst(s, { allowBoot: true });
         d.progress({ stage: "writing", percent: null });
         acting();
@@ -40511,8 +40873,8 @@ async function runVciJob(job, d) {
       const safe = Object.fromEntries(Object.entries(e.detail).filter(([k, v]) => k !== "raw" && k !== "cause" && (v === null || ["string", "number", "boolean"].includes(typeof v))));
       const s = session;
       const device = acted && s ? await snapshot(s).catch(() => void 0) : void 0;
-      const connection = acted ? Object.assign({}, ...opened.map((ch) => ch.diagnostics?.() ?? {})) : {};
-      return finish({ status, error_code: e.code, error_message: e.message, device, detail: { ...safe, ...connection, sent_to_device: acted } });
+      const connection2 = acted ? Object.assign({}, ...opened.map((ch) => ch.diagnostics?.() ?? {})) : {};
+      return finish({ status, error_code: e.code, error_message: e.message, device, detail: { ...safe, ...connection2, sent_to_device: acted } });
     }
     d.log.error("vci: job crashed", { job_id: job.id, kind: job.kind, error: e instanceof Error ? e.message : String(e) });
     return finish({ status: acted ? "unconfirmed" : "failed", error_code: "internal_error", error_message: "Ett ov\xE4ntat fel intr\xE4ffade i bryggan. Se bryggans logg.", detail: { sent_to_device: acted } });
@@ -41628,7 +41990,7 @@ var JobRunner = class {
 };
 
 // src/store.ts
-import { chmodSync, existsSync as existsSync4, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, renameSync, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
+import { chmodSync, existsSync as existsSync5, mkdirSync as mkdirSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, renameSync, rmSync, writeFileSync as writeFileSync3 } from "node:fs";
 import { randomBytes as randomBytes4 } from "node:crypto";
 import { dirname, join as join4 } from "node:path";
 var Store = class {
@@ -41649,7 +42011,7 @@ var Store = class {
     return join4(this.root, ...parts);
   }
   exists(...parts) {
-    return existsSync4(this.path(...parts));
+    return existsSync5(this.path(...parts));
   }
   write(parts, data) {
     const target = this.path(...parts);
@@ -41794,7 +42156,7 @@ var Bridge2 = class {
         fetch: this.fetchFn,
         downloadHosts: hosts,
         allowHttpDownloads: this.config.devMode,
-        transports: this.vciTransports ?? systemTransports({ serialPort: this.config.vciSerialPort ?? null }),
+        transports: this.vciTransports ?? systemTransports({ serialPort: this.config.vciSerialPort ?? null, sppPin: this.config.vciSppPin ?? void 0 }),
         timings: this.timing.vci,
         scanMs: this.timing.vciScanMs,
         progressIntervalMs: this.timing.vciProgressMs,
@@ -42166,7 +42528,7 @@ init_config();
 function healthcheck() {
   const file2 = join6(process.env.SMGD_BRIDGE_DATA_DIR ?? "/data", STATUS_FILE);
   try {
-    if (!existsSync5(file2)) throw new Error("no status file yet");
+    if (!existsSync6(file2)) throw new Error("no status file yet");
     const status = JSON.parse(readFileSync3(file2, "utf8"));
     const age = Date.now() - new Date(status.updated_at ?? 0).getTime();
     if (status.state === "stopped") throw new Error("the bridge has stopped");
