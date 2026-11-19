@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.10";
+    BRIDGE_VERSION = "0.1.12";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -39857,6 +39857,8 @@ function systemBusSocket(env = process.env) {
 var BluezCentral = class {
   dbus = null;
   bus = null;
+  /** Whether the latest connect removed the device first so that its services were read fresh (for the stats). */
+  gattRefreshed = false;
   async connectBus() {
     if (this.bus && this.dbus) return { dbus: this.dbus, bus: this.bus };
     const socket = systemBusSocket();
@@ -39930,10 +39932,24 @@ var BluezCentral = class {
   async connect(name, timeoutMs) {
     const { dbus, bus } = await this.connectBus();
     const deadline = Date.now() + timeoutMs;
+    let refreshed = false;
     const device = await this.discovering(async (adapter) => {
       for (; ; ) {
-        const matches = this.seen(await this.objects(), adapter).filter((d) => d.peer.name === name);
+        const objects = await this.objects();
+        const matches = this.seen(objects, adapter).filter((d) => d.peer.name === name);
         if (matches.length > 1) throw new VciError("wrong_device", `Flera Bluetooth-enheter i n\xE4rheten heter ${name}. St\xE4ng av de andra och f\xF6rs\xF6k igen.`, { addresses: matches.map((m) => m.peer.address) });
+        if (matches.length === 1 && !refreshed) {
+          refreshed = true;
+          const dev = objects[matches[0].path]?.["org.bluez.Device1"];
+          if (dev?.Paired?.value !== true && dev?.Connected?.value !== true) {
+            const removed = await this.call(adapter, "org.bluez.Adapter1", "RemoveDevice", "o", [matches[0].path]).then(() => true, () => false);
+            this.gattRefreshed = removed;
+            if (removed) {
+              await sleep3(500);
+              continue;
+            }
+          }
+        }
         if (matches.length === 1) return matches[0];
         if (Date.now() >= deadline) throw new VciError("disconnected", `Ingen Bluetooth-enhet med namnet ${name} hittades i n\xE4rheten av bryggan.`);
         await sleep3(500);
@@ -39959,18 +39975,24 @@ var BluezCentral = class {
       const writeFlags = objects[writePath]?.["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [];
       const writeType = writeFlags.includes("write") || !writeFlags.includes("write-without-response") ? "request" : "command";
       const listeners = /* @__PURE__ */ new Set();
+      const gattRefreshed = this.gattRefreshed;
       const notifyFlags = objects[notifyPath]?.["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [];
+      const charsOfService = under.filter(([path, i]) => path.startsWith(`${service}/`) && i["org.bluez.GattCharacteristic1"]).map(([path, i]) => ({ path, uuid: String(i["org.bluez.GattCharacteristic1"]?.UUID?.value ?? "").toLowerCase(), flags: i["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [] }));
+      const notifyPaths = /* @__PURE__ */ new Set([notifyPath, ...charsOfService.filter((c) => c.flags.includes("notify") || c.flags.includes("indicate")).map((c) => c.path)]);
+      const short2 = (u) => /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/.test(u) ? u.slice(4, 8) : u.slice(0, 8);
+      const notifiedBy = /* @__PURE__ */ new Map();
       const counts = { writes: 0, bytes_out: 0, write_errors: 0, notifications: 0, bytes_in: 0, signals_under_device: 0 };
       const rule = `type='signal',sender='${BLUEZ}',path_namespace='${device.path}'`;
       const onMessage = (msg) => {
         if (typeof msg.path === "string" && msg.path.startsWith(device.path)) counts.signals_under_device++;
-        if (msg.path !== notifyPath || msg.interface !== PROPS || msg.member !== "PropertiesChanged") return;
+        if (!msg.path || !notifyPaths.has(msg.path) || msg.interface !== PROPS || msg.member !== "PropertiesChanged") return;
         const changed = msg.body?.[1];
         const value = changed?.Value?.value;
         if (msg.body?.[0] !== "org.bluez.GattCharacteristic1" || !value) return;
         const bytes = new Uint8Array(value);
         counts.notifications++;
         counts.bytes_in += bytes.length;
+        notifiedBy.set(msg.path, (notifiedBy.get(msg.path) ?? 0) + 1);
         for (const l of listeners) l(bytes);
       };
       const busCall = (member, r2) => timeout(bus.call(new dbus.Message({ destination: "org.freedesktop.DBus", path: "/org/freedesktop/DBus", interface: "org.freedesktop.DBus", member, signature: "s", body: [r2] })), CALL_TIMEOUT_MS, member);
@@ -39982,6 +40004,11 @@ var BluezCentral = class {
       await busCall("AddMatch", rule);
       bus.on("message", onMessage);
       await this.call(notifyPath, "org.bluez.GattCharacteristic1", "StartNotify");
+      const notifyErrors = [];
+      for (const path of notifyPaths) {
+        if (path === notifyPath) continue;
+        await this.call(path, "org.bluez.GattCharacteristic1", "StartNotify").catch((e) => notifyErrors.push(`${short2(charsOfService.find((c) => c.path === path)?.uuid ?? "?")}: ${(e instanceof Error ? e.message : String(e)).slice(0, 60)}`));
+      }
       const release = unsubscribe;
       let queue = Promise.resolve();
       return {
@@ -40024,6 +40051,11 @@ var BluezCentral = class {
           };
           return {
             ...counts,
+            gatt_read_fresh: gattRefreshed,
+            // every characteristic of the FFF0 service and its flags, and which ones notified how many times
+            characteristics: charsOfService.map((c) => `${short2(c.uuid)}[${c.flags.join("|")}]`).join(","),
+            notified_by: [...notifiedBy].map(([path, n]) => `${short2(charsOfService.find((c) => c.path === path)?.uuid ?? "?")}=${n}`).join(","),
+            notify_errors: notifyErrors.join("; "),
             write_type: writeType,
             write_flags: writeFlags.join(","),
             notify_flags: notifyFlags.join(","),
@@ -40039,7 +40071,7 @@ var BluezCentral = class {
         },
         disconnect: async () => {
           await release();
-          await this.call(notifyPath, "org.bluez.GattCharacteristic1", "StopNotify", "", [], 5e3).catch(() => void 0);
+          for (const path of notifyPaths) await this.call(path, "org.bluez.GattCharacteristic1", "StopNotify", "", [], 5e3).catch(() => void 0);
           await this.call(device.path, "org.bluez.Device1", "Disconnect", "", [], 5e3).catch(() => void 0);
         }
       };

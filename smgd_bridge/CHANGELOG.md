@@ -1,5 +1,16 @@
 # Ändringslogg
 
+## 0.1.12
+
+- **BLE: färska GATT-uppgifter.** BlueZ sparar enhetens tjänster från tidigare anslutningar; när de är inaktuella
+  hamnar skrivningar och notiser på fel ställe och inget kommer tillbaka. En enhet som inte är parkopplad tas därför
+  bort ur BlueZ en gång före anslutningen och hittas igen, så att tjänsterna läses på nytt – som i webbläsaren.
+
+## 0.1.11
+
+- **BLE:** bryggan lyssnar på alla karakteristiker i modulens FFF0-tjänst som kan skicka notiser, inte bara FFF1,
+  och listar dem med sina egenskaper i jobbets felsökningsuppgifter.
+
 ## 0.1.10
 
 - **Felsökning av BLE:** när varken VCI:n eller modulen svarar redovisar jobbet vad som hände på länken: antal
