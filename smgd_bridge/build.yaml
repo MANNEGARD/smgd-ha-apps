@@ -1,0 +1,5 @@
+# Home Assistant bygger appen lokalt (ingen image: i config.yaml). Basen är Node 22 på Alpine – Home Assistants
+# egen basavbild saknar Node.
+build_from:
+  amd64: node:22-alpine
+  aarch64: node:22-alpine

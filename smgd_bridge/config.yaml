@@ -7,7 +7,6 @@ arch:
   - amd64
   - aarch64
 # Prebuilt image, published by .github/workflows/release-bridge.yml. `{arch}` is filled in by Home Assistant.
-image: ghcr.io/mannegard/smgd-bridge-{arch}
 startup: application
 boot: auto
 # How long Home Assistant waits after asking the app to stop before it ends it by force (seconds;
