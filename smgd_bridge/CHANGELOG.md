@@ -1,5 +1,10 @@
 # Ändringslogg
 
+## 0.1.14
+
+- **BLE exakt som webbläsaren:** bara FFF1 får notiser påslagna. Med FFF3 påslagen (0.1.11–0.1.13) skickade modulen
+  ett statusmeddelande där och inget på datakanalen. Övriga karakteristiker listas fortfarande i felsökningen.
+
 ## 0.1.13
 
 - **BLE som i webbläsaren:** inget skickas före protokollets första fråga (AT-stängningen före jobbet är borttagen).

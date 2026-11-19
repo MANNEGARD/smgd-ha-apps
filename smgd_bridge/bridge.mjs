@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.13";
+    BRIDGE_VERSION = "0.1.14";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -40013,10 +40013,6 @@ var BluezCentral = class {
       bus.on("message", onMessage);
       await this.call(notifyPath, "org.bluez.GattCharacteristic1", "StartNotify");
       const notifyErrors = [];
-      for (const path of notifyPaths) {
-        if (path === notifyPath) continue;
-        await this.call(path, "org.bluez.GattCharacteristic1", "StartNotify").catch((e) => notifyErrors.push(`${short2(charsOfService.find((c) => c.path === path)?.uuid ?? "?")}: ${(e instanceof Error ? e.message : String(e)).slice(0, 60)}`));
-      }
       const release = unsubscribe;
       let queue = Promise.resolve();
       return {
@@ -40080,7 +40076,7 @@ var BluezCentral = class {
         },
         disconnect: async () => {
           await release();
-          for (const path of notifyPaths) await this.call(path, "org.bluez.GattCharacteristic1", "StopNotify", "", [], 5e3).catch(() => void 0);
+          await this.call(notifyPath, "org.bluez.GattCharacteristic1", "StopNotify", "", [], 5e3).catch(() => void 0);
           await this.call(device.path, "org.bluez.Device1", "Disconnect", "", [], 5e3).catch(() => void 0);
         }
       };
