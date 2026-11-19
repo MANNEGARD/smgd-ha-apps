@@ -1,5 +1,10 @@
 # Ändringslogg
 
+## 0.1.10
+
+- **Felsökning av BLE:** när varken VCI:n eller modulen svarar redovisar jobbet vad som hände på länken: antal
+  skrivningar och notiser, om notiserna är påslagna, enhetens GATT-tjänster och anslutningsläge (inga data).
+
 ## 0.1.9
 
 - **BLE:** bryggan stänger Bluetooth-modulens AT-motor innan protokollet körs (en motor som lämnats öppen släpper

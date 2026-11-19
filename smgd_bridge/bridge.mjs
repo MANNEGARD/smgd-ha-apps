@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.9";
+    BRIDGE_VERSION = "0.1.10";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -39816,6 +39816,10 @@ var BleChannel = class {
       }
     }
   }
+  /** The link's own account (writes, notifications, the device's state); empty when there is no link. */
+  async diagnostics() {
+    return await this.link?.stats?.().catch(() => ({})) ?? {};
+  }
   async close() {
     const old = this.link;
     this.link = null;
@@ -39955,13 +39959,18 @@ var BluezCentral = class {
       const writeFlags = objects[writePath]?.["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [];
       const writeType = writeFlags.includes("write") || !writeFlags.includes("write-without-response") ? "request" : "command";
       const listeners = /* @__PURE__ */ new Set();
-      const rule = `type='signal',sender='${BLUEZ}',interface='${PROPS}',member='PropertiesChanged',path='${notifyPath}'`;
+      const notifyFlags = objects[notifyPath]?.["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [];
+      const counts = { writes: 0, bytes_out: 0, write_errors: 0, notifications: 0, bytes_in: 0, signals_under_device: 0 };
+      const rule = `type='signal',sender='${BLUEZ}',path_namespace='${device.path}'`;
       const onMessage = (msg) => {
+        if (typeof msg.path === "string" && msg.path.startsWith(device.path)) counts.signals_under_device++;
         if (msg.path !== notifyPath || msg.interface !== PROPS || msg.member !== "PropertiesChanged") return;
         const changed = msg.body?.[1];
         const value = changed?.Value?.value;
         if (msg.body?.[0] !== "org.bluez.GattCharacteristic1" || !value) return;
         const bytes = new Uint8Array(value);
+        counts.notifications++;
+        counts.bytes_in += bytes.length;
         for (const l of listeners) l(bytes);
       };
       const busCall = (member, r2) => timeout(bus.call(new dbus.Message({ destination: "org.freedesktop.DBus", path: "/org/freedesktop/DBus", interface: "org.freedesktop.DBus", member, signature: "s", body: [r2] })), CALL_TIMEOUT_MS, member);
@@ -39980,7 +39989,16 @@ var BluezCentral = class {
         onData: (listener) => void listeners.add(listener),
         write: (bytes) => {
           const run = async () => {
-            const send = (piece) => this.call(writePath, "org.bluez.GattCharacteristic1", "WriteValue", "aya{sv}", [Buffer.from(piece), { type: new dbus.Variant("s", writeType) }]);
+            const send = async (piece) => {
+              try {
+                await this.call(writePath, "org.bluez.GattCharacteristic1", "WriteValue", "aya{sv}", [Buffer.from(piece), { type: new dbus.Variant("s", writeType) }]);
+                counts.writes++;
+                counts.bytes_out += piece.length;
+              } catch (e) {
+                counts.write_errors++;
+                throw e;
+              }
+            };
             if (bytes.length > WRITE_CHUNK) {
               try {
                 await send(bytes);
@@ -39998,6 +40016,26 @@ var BluezCentral = class {
           const result = queue.then(run, run);
           queue = result.catch(() => void 0);
           return result;
+        },
+        stats: async () => {
+          const prop = async (path, iface, name2) => {
+            const [v] = await this.call(path, PROPS, "Get", "ss", [iface, name2], 5e3).catch(() => [void 0]);
+            return v?.value ?? null;
+          };
+          return {
+            ...counts,
+            write_type: writeType,
+            write_flags: writeFlags.join(","),
+            notify_flags: notifyFlags.join(","),
+            // the device's GATT services: shows whether the data channel might be elsewhere than FFF0 (FFE0, Nordic UART)
+            services: under.map(([, i]) => String(i["org.bluez.GattService1"]?.UUID?.value ?? "")).filter(Boolean).map((u) => /^0000([0-9a-f]{4})-0000-1000-8000-00805f9b34fb$/i.test(u) ? u.slice(4, 8) : u.slice(0, 8)).join(","),
+            notifying: await prop(notifyPath, "org.bluez.GattCharacteristic1", "Notifying"),
+            connected: await prop(device.path, "org.bluez.Device1", "Connected"),
+            paired: await prop(device.path, "org.bluez.Device1", "Paired"),
+            bonded: await prop(device.path, "org.bluez.Device1", "Bonded"),
+            address_type: await prop(device.path, "org.bluez.Device1", "AddressType"),
+            services_resolved: await prop(device.path, "org.bluez.Device1", "ServicesResolved")
+          };
         },
         disconnect: async () => {
           await release();
@@ -40506,7 +40544,7 @@ function systemTransports(o) {
       if (!state.ok) throw new VciError("disconnected", `Bluetooth \xE4r inte tillg\xE4ngligt p\xE5 datorn som k\xF6r bryggan${state.detail ? ` (${state.detail})` : ""}.`);
       const channel = new BleChannel(central, name);
       await channel.connect(2e4);
-      return { channel, describe: `${name} (${channel.address ?? "?"})`, close: () => channel.close() };
+      return { channel, describe: `${name} (${channel.address ?? "?"})`, close: () => channel.close(), diagnostics: () => channel.diagnostics() };
     },
     openSpp: async (target) => {
       const state = await bluetoothState(true);
@@ -40682,6 +40720,8 @@ async function runVciJob(job, d) {
       const module = await probeModule(s);
       const moduleAnswered = module.name !== null || module.mac !== null;
       detail.bluetooth_module = { answered: moduleAnswered, name: module.name, mac: module.mac };
+      const link2 = await Promise.resolve(bt?.diagnostics?.()).catch(() => void 0);
+      if (link2 && Object.keys(link2).length) detail.link = link2;
       throw refuse("timeout", moduleAnswered ? `Bluetooth-modulen svarar \xF6ver ${connection.toUpperCase()}${module.name ? ` (${module.name}${module.mac ? `, ${module.mac}` : ""})` : ""}, men VCI:n bakom den svarar inte p\xE5 protokollet. L\xE4nken fungerar allts\xE5 \u2013 troligen beh\xF6ver VCI:n str\xF6m fr\xE5n bilen (OBD) f\xF6r att svara \xF6ver Bluetooth, som f\xF6r SPP. Inget har skrivits.` : `Varken VCI:n eller dess Bluetooth-modul svarar \xF6ver ${connection.toUpperCase()} (${via2.bt_target ?? "?"}), fast anslutningen \xF6ppnades: inget kommer tillbaka fr\xE5n enheten. Kontrollera att det \xE4r r\xE4tt enhet och att den inte \xE4r ansluten till n\xE5got annat. Inget har skrivits.`);
     }
     if (isSilentDevice(info) && !o.allowSilent) {

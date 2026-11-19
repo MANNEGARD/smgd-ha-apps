@@ -1,5 +1,5 @@
 name: SMGD Bridge
-version: "0.1.9"
+version: "0.1.10"
 slug: smgd_bridge
 description: Lokal agent för SMGD Developer Lab – installerar appar på LG webOS-TV och uppdaterar ESPHome-enheter i hemnätverket.
 url: https://github.com/MANNEGARD/smgd-ha-apps/blob/main/smgd_bridge/DOCS.md
