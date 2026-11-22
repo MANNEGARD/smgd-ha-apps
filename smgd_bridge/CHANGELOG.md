@@ -1,5 +1,12 @@
 # Ändringslogg
 
+## 0.1.15
+
+- **Paritet med direktanslutningen:** tre nya VCI-jobb så bryggan kan göra samma saker som webbläsaren mot
+  en direktansluten enhet — terminal (skicka ett AT-kommando till modulen eller en FX-ram och få svaret,
+  skicka→svar), läs pin-spänning på angivna stift, och sätt Bluetooth-namnet (klassiskt och BLE). Bryggan
+  annonserar nu vilka jobbtyper den stödjer, så Developer Lab bara erbjuder det den här versionen klarar.
+
 ## 0.1.14
 
 - **BLE exakt som webbläsaren:** bara FFF1 får notiser påslagna. Med FFF3 påslagen (0.1.11–0.1.13) skickade modulen

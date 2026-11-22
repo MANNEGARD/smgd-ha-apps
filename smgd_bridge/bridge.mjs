@@ -20704,7 +20704,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.14";
+    BRIDGE_VERSION = "0.1.15";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -34615,7 +34615,8 @@ var VciFoxwellSerialList = external_exports.object({
 var Serial2 = external_exports.string().min(3).max(64).regex(/^[A-Za-z0-9]+$/);
 var VciFoxwellSearch = external_exports.object({
   serial: Serial2,
-  kind: external_exports.enum(["firmware", "car"]),
+  /** firmware = FIRMWARE-*, car = CAR/SERVICE, app = APP/COMTXTLIB (enhetens app och textbibliotek). */
+  kind: external_exports.enum(["firmware", "car", "app"]),
   /** Firmware only: the VCI types to search for. Defaults to the known list when empty. */
   module_ids: external_exports.array(external_exports.string().max(32)).max(40).optional()
 });
@@ -34625,7 +34626,12 @@ var VciFoxwellItem = external_exports.object({
   soft_name: external_exports.string(),
   soft_type: external_exports.string(),
   version: external_exports.string(),
-  size_bytes: external_exports.number().int()
+  size_bytes: external_exports.number().int(),
+  /** Extra uppgifter från soft_search_v2 (belagda 2026-11-22); utelämnade när Foxwell inte ger dem. */
+  release_date: external_exports.string().nullish(),
+  update_tips: external_exports.string().nullish(),
+  package_type: external_exports.string().nullish(),
+  patch_version: external_exports.string().nullish()
 });
 var VciFoxwellSearchResult = external_exports.object({ items: external_exports.array(VciFoxwellItem) });
 var VCI_FOXWELL_IMPORT_MAX = 5;
@@ -34642,7 +34648,7 @@ var VciFoxwellSerialStatus = external_exports.object({ serial: external_exports.
 
 // ../../packages/contracts/src/vci-bridge.ts
 init_zod();
-var VCI_JOB_KINDS = ["scan", "read_info", "write_serial", "write_mac", "switch_mode", "firmware_update", "secret_key", "write_vci_type", "write_version"];
+var VCI_JOB_KINDS = ["scan", "read_info", "write_serial", "write_bt_name", "write_mac", "switch_mode", "firmware_update", "secret_key", "write_vci_type", "write_version", "pin_voltage", "raw_command"];
 var VCI_JOB_STATUSES = ["queued", "claimed", "running", "succeeded", "failed", "unconfirmed", "canceled"];
 var VCI_JOB_OUTCOMES = ["succeeded", "failed", "unconfirmed"];
 var VCI_RESULT_VALUE_MAX = 200;
@@ -34651,8 +34657,9 @@ var Serial3 = external_exports.string().regex(/^[A-Za-z0-9]{1,32}$/);
 var Serial13 = external_exports.string().regex(/^[A-Za-z0-9]{13}$/);
 var Mac2 = external_exports.string().regex(/^[0-9A-F]{12}$/);
 var Short2 = external_exports.string().max(64);
+var BtName = external_exports.string().min(1).max(29).regex(/^[\x20-\x7e]+$/);
 var VCI_CONNECTIONS = ["usb", "ble", "spp"];
-var BtTarget = external_exports.string().trim().min(1).max(64).regex(/^[^ -]+$/);
+var BtTarget = external_exports.string().trim().min(1).max(64).regex(/^[^\x00-\x1f]+$/);
 var VIA = { connection: external_exports.enum(VCI_CONNECTIONS).default("usb"), bt_target: BtTarget.optional() };
 var via = (shape) => external_exports.object({ ...shape, ...VIA }).superRefine((v, ctx) => {
   const o = v;
@@ -34678,7 +34685,17 @@ var VciJobParams = {
   /** D1: BOOT → SET_VCI_TYPE (0C 05) → APP → read the type back. */
   write_vci_type: via({ vci_type: VciIdentityText }),
   /** D1: BOOT → SET_VERSION (03 05) → APP → read the version back. */
-  write_version: via({ version: VciIdentityText })
+  write_version: via({ version: VciIdentityText }),
+  /** Sets the Bluetooth module's name (classic AT+NAME= and, unless turned off, BLE AT+LENAME=), then reads both back. */
+  write_bt_name: via({ bt_name: BtName, le_name: external_exports.boolean().default(true) }),
+  /** Reads the voltage the device measures on one or more pins ({10,0}); the answer is millivolts per pin. */
+  pin_voltage: via({ pins: external_exports.array(external_exports.number().int().min(0).max(255)).min(1).max(32) }),
+  /**
+   * The terminal, as a job: send one command to the device and report what came back (no live stream).
+   * `at` = an AT command to the Bluetooth module (needs a Bluetooth connection); `fx` = a raw FX frame,
+   * given as hex "OP P1 [payload…]" (the SEQ and checksum are added). The reply is in `detail.reply_hex`/`reply_text`.
+   */
+  raw_command: via({ format: external_exports.enum(["at", "fx"]).default("at"), command: external_exports.string().trim().min(1).max(512), timeout_ms: external_exports.number().int().min(100).max(1e4).default(1500) })
 };
 var VciJobCreate = external_exports.object({
   bridge_id: Uuid,
@@ -34766,8 +34783,10 @@ var vciKeySealContext = (jobId) => `vci-secret-key:${jobId}`;
 function vciSuccessEvidenceMissing(kind, params, result, expected = {}) {
   if (result.status !== "succeeded") return null;
   if (kind === "scan") return result.scan ? null : "the scan result";
+  if (kind === "pin_voltage") return result.detail && typeof result.detail.pin_voltage === "object" && !Array.isArray(result.detail.pin_voltage) ? null : "the pin voltages the device reported";
+  if (kind === "raw_command") return null;
   const str = (v) => typeof v === "string" ? v : null;
-  const target = kind === "write_serial" ? str(params.serial) : kind === "write_mac" ? str(params.mac) : kind === "switch_mode" ? str(params.target) : kind === "write_vci_type" ? str(params.vci_type) : kind === "write_version" ? str(params.version) : kind === "firmware_update" ? expected.firmware_version ?? result.new_value ?? null : null;
+  const target = kind === "write_serial" ? str(params.serial) : kind === "write_bt_name" ? str(params.bt_name) : kind === "write_mac" ? str(params.mac) : kind === "switch_mode" ? str(params.target) : kind === "write_vci_type" ? str(params.vci_type) : kind === "write_version" ? str(params.version) : kind === "firmware_update" ? expected.firmware_version ?? result.new_value ?? null : null;
   return vciEvidenceMissing(kind, { path: "bridge", device: result.device ?? null, detail: result.detail, target, setBtName: kind === "write_serial" && params.set_bt_name !== false, expected });
 }
 
@@ -38323,6 +38342,13 @@ function toHex2(bytes, separator = " ") {
   for (let i = 0; i < bytes.length; i++) parts.push((bytes[i] & 255).toString(16).padStart(2, "0").toUpperCase());
   return parts.join(separator);
 }
+function fromHex(text) {
+  const clean = text.replace(/0x/gi, "").replace(/[\s,:;-]/g, "");
+  if (clean.length === 0 || clean.length % 2 !== 0 || /[^0-9a-fA-F]/.test(clean)) return null;
+  const out = new Uint8Array(clean.length / 2);
+  for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.slice(i * 2, i * 2 + 2), 16);
+  return out;
+}
 function asciiField(data) {
   let end = data.indexOf(0);
   if (end < 0) end = data.length;
@@ -40991,6 +41017,63 @@ async function runVciJob(job, d) {
         acting();
         return identityResult(s, await s.writeVersion(p.version));
       }
+      case "write_bt_name": {
+        const p = parsed.data;
+        const s = await openDevice();
+        if (!overBluetooth) {
+          const info = await readFirst(s);
+          if (!info.bt_name) throw refuse("wrong_device", "Enheten uppgav inget Bluetooth-namn \xF6ver USB, s\xE5 det g\xE5r inte att veta vilken Bluetooth-enhet som \xE4r r\xE4tt. Inget har skrivits.");
+          try {
+            await openBt(s, info.bt_name);
+          } catch (e) {
+            throw refuse(e instanceof VciError ? e.code : "disconnected", `Bluetooth-namnet kan inte s\xE4ttas: ${e instanceof Error ? e.message : "Bluetooth-anslutningen misslyckades."} Inget har skrivits.`);
+          }
+        }
+        if (!session?.at) throw refuse("protocol_unsupported", "Ingen AT-kanal till Bluetooth-modulen. Inget har skrivits.");
+        const old = await s.readBtName().catch(() => null);
+        d.progress({ stage: "writing", percent: null });
+        acting();
+        const r2 = await s.writeBtName(p.bt_name);
+        await afterAt();
+        Object.assign(detail, nameWriteDetail(r2));
+        const device = await snapshot(s).catch(() => void 0);
+        if (r2.status === "succeeded") return { status: "succeeded", device, old_value: old, new_value: p.bt_name };
+        return { status: r2.status, device, old_value: old, new_value: p.bt_name, error_code: r2.status === "failed" ? "not_confirmed" : "not_acknowledged", error_message: r2.message };
+      }
+      case "pin_voltage": {
+        const p = parsed.data;
+        const s = await openDevice();
+        await readFirst(s, { allowBoot: true });
+        d.progress({ stage: "reading", percent: null });
+        const volts = {};
+        for (const pin of p.pins) {
+          const r2 = await s.readPinVoltage(pin).catch(() => null);
+          if (r2 && r2.kind === "value") volts[String(pin)] = r2.value.millivolts;
+        }
+        const device = await snapshot(s).catch(() => void 0);
+        return { status: "succeeded", device, detail: { pin_voltage: volts } };
+      }
+      case "raw_command": {
+        const p = parsed.data;
+        const s = await openDevice();
+        if (p.format === "at") {
+          if (!session?.at) {
+            const info = await s.readInfo().catch(() => null);
+            before = info;
+            if (!info?.bt_name) throw refuse("protocol_unsupported", "AT-kommandon kr\xE4ver en Bluetooth-anslutning till modulen. Anslut med BLE/SPP, eller se till att enheten uppger sitt Bluetooth-namn \xF6ver USB.");
+            await openBt(s, info.bt_name);
+          }
+          acting();
+          const reply = await s.at.command(p.command, { timeoutMs: p.timeout_ms });
+          await afterAt();
+          return { status: "succeeded", detail: { format: "at", command: p.command.slice(0, 200), reply_text: reply.lines.join("\n").slice(0, 1e3), ...reply.value !== null ? { reply_value: reply.value.slice(0, 200) } : {} } };
+        }
+        const bytes = fromHex(p.command);
+        if (!bytes || bytes.length < 2) throw refuse("protocol_mismatch", 'FX-kommandot m\xE5ste vara hex med minst OP och P1 (t.ex. "02 05 00").');
+        acting();
+        const r2 = await s.requestFrame([bytes[0], bytes[1]], bytes.slice(2), { timeoutMs: p.timeout_ms });
+        return { status: "succeeded", detail: { format: "fx", command: toHex2(r2.sent), reply_hex: r2.answer ? toHex2(r2.answer.raw) : "", reply_status: r2.answer ? hexStatus(r2.answer.status) : "inget svar", waited_ms: Math.round(r2.elapsedMs) } };
+      }
     }
   };
   try {
@@ -41053,7 +41136,7 @@ var VciWorker = class _VciWorker {
   }
   async capability() {
     const reach = await this.d.transports.probe().catch(() => ({ serial_port: false, bluetooth: false }));
-    return { enabled: true, ...reach };
+    return { enabled: true, ...reach, jobs: [...VCI_JOB_KINDS] };
   }
   // ───────────────────────────── the journal ─────────────────────────────
   file(id) {
