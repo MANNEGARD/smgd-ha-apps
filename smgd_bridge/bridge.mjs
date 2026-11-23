@@ -666,8 +666,8 @@ function base64urlToUint8Array(base64url3) {
 function uint8ArrayToBase64url(bytes) {
   return uint8ArrayToBase64(bytes).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
 }
-function hexToUint8Array(hex3) {
-  const cleanHex = hex3.replace(/^0x/, "");
+function hexToUint8Array(hex4) {
+  const cleanHex = hex4.replace(/^0x/, "");
   if (cleanHex.length % 2 !== 0) {
     throw new Error("Invalid hex string length");
   }
@@ -20657,7 +20657,11 @@ function loadConfig(env = process.env) {
     vci_enabled: raw.vci_enabled ?? (fromEnv("SMGD_VCI_ENABLED") ? /^(1|true|yes|on)$/i.test(fromEnv("SMGD_VCI_ENABLED")) : void 0),
     // an empty field in the app configuration means "find the port", not "a port with no name"
     vci_spp_pin: (typeof raw.vci_spp_pin === "string" && raw.vci_spp_pin.trim() !== "" ? raw.vci_spp_pin.trim() : void 0) ?? fromEnv("SMGD_VCI_SPP_PIN"),
-    vci_serial_port: (typeof raw.vci_serial_port === "string" && raw.vci_serial_port.trim() !== "" ? raw.vci_serial_port.trim() : void 0) ?? fromEnv("SMGD_VCI_SERIAL_PORT")
+    vci_serial_port: (typeof raw.vci_serial_port === "string" && raw.vci_serial_port.trim() !== "" ? raw.vci_serial_port.trim() : void 0) ?? fromEnv("SMGD_VCI_SERIAL_PORT"),
+    vci_diag_relay: raw.vci_diag_relay ?? (fromEnv("SMGD_VCI_DIAG_RELAY") ? /^(1|true|yes|on)$/i.test(fromEnv("SMGD_VCI_DIAG_RELAY")) : void 0),
+    vci_engine_ws: (typeof raw.vci_engine_ws === "string" && raw.vci_engine_ws.trim() !== "" ? raw.vci_engine_ws.trim() : void 0) ?? fromEnv("SMGD_VCI_ENGINE_WS"),
+    vci_relay_session: (typeof raw.vci_relay_session === "string" && raw.vci_relay_session.trim() !== "" ? raw.vci_relay_session.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_SESSION"),
+    vci_relay_target: (typeof raw.vci_relay_target === "string" && raw.vci_relay_target.trim() !== "" ? raw.vci_relay_target.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_TARGET")
   };
   for (const key of ["allowed_networks", "download_hosts"]) if (Array.isArray(merged[key]) && merged[key].length === 0) delete merged[key];
   const parsed = Options.safeParse(Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== void 0)));
@@ -20692,6 +20696,10 @@ function loadConfig(env = process.env) {
     vciEnabled: o.vci_enabled,
     vciSerialPort: o.vci_serial_port ?? null,
     vciSppPin: o.vci_spp_pin ?? null,
+    vciDiagRelay: o.vci_diag_relay,
+    vciEngineWs: o.vci_engine_ws ?? null,
+    vciRelaySession: o.vci_relay_session,
+    vciRelayTarget: o.vci_relay_target ?? null,
     aresBinDir: existsSync(`${aresDir}/ares-install`) ? aresDir : null,
     homeAssistant: supervisor ? { url: fromEnv("SMGD_HA_URL") ?? "http://supervisor/core/api", wsUrl: fromEnv("SMGD_HA_WS_URL") ?? "ws://supervisor/core/websocket", token: supervisor } : null,
     devMode,
@@ -20704,7 +20712,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.15";
+    BRIDGE_VERSION = "0.1.16";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -20755,7 +20763,20 @@ var init_config = __esm({
       /** The serial port the VCI is on, e.g. /dev/ttyACM0. Not set: the only port under /dev/serial/by-id (with several, none is guessed). */
       vci_serial_port: external_exports.string().max(300).regex(/^\/dev\/[A-Za-z0-9._:+/-]+$/).refine((p) => !p.split("/").includes(".."), "must be a path under /dev").optional(),
       /** PIN when a VCI is paired for SPP (classic Bluetooth). Feasycom modules use 0000 unless it has been changed. */
-      vci_spp_pin: external_exports.string().regex(/^[0-9]{4,16}$/).optional()
+      vci_spp_pin: external_exports.string().regex(/^[0-9]{4,16}$/).optional(),
+      /**
+       * Whether this bridge relays a live diagnostic session between SMGD VCI Engine (on the VPS) and the
+       * FOX500 over Bluetooth/serial ("Diagnostik (motor)" in the web app). Off by default; it only runs
+       * when `vci_engine_ws` is also set. The token is NOT a config value: it is read from the data
+       * directory file `vci-engine.token` or the environment variable SMGD_VCI_TOKEN.
+       */
+      vci_diag_relay: external_exports.boolean().default(false),
+      /** The engine's bridge WebSocket, e.g. wss://smgd.se/dev/vci-engine-bridge. Required for the relay. */
+      vci_engine_ws: external_exports.string().url().max(300).optional(),
+      /** The session the relay joins; must match the one chosen in the web tab. Default "default". */
+      vci_relay_session: external_exports.string().min(1).max(64).default("default"),
+      /** SPP target (name or MAC) for the FOX500; empty uses the configured serial port instead. */
+      vci_relay_target: external_exports.string().max(200).optional()
     });
     ConfigError = class extends Error {
     };
@@ -33114,13 +33135,13 @@ function enrollSigningInput(signingPublicKey, encryptionPublicKey, timestamp) {
 }
 async function refreshSigningInput(bridgeId, timestamp, nonce, refreshToken) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(refreshToken));
-  const hex3 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
-  return new TextEncoder().encode(`smgd-bridge-refresh:v1:${bridgeId}:${timestamp}:${nonce}:${hex3}`);
+  const hex4 = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+  return new TextEncoder().encode(`smgd-bridge-refresh:v1:${bridgeId}:${timestamp}:${nonce}:${hex4}`);
 }
 async function bridgeFingerprint(signingPublicKey) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`smgd-bridge:${signingPublicKey}`));
-  const hex3 = Array.from(new Uint8Array(digest).slice(0, 10), (b) => b.toString(16).padStart(2, "0")).join("");
-  return (hex3.match(/.{4}/g) ?? []).join("-").toUpperCase();
+  const hex4 = Array.from(new Uint8Array(digest).slice(0, 10), (b) => b.toString(16).padStart(2, "0")).join("");
+  return (hex4.match(/.{4}/g) ?? []).join("-").toUpperCase();
 }
 var JobDevice = external_exports.object({
   id: Uuid,
@@ -34648,7 +34669,7 @@ var VciFoxwellSerialStatus = external_exports.object({ serial: external_exports.
 
 // ../../packages/contracts/src/vci-bridge.ts
 init_zod();
-var VCI_JOB_KINDS = ["scan", "read_info", "write_serial", "write_bt_name", "write_mac", "switch_mode", "firmware_update", "secret_key", "write_vci_type", "write_version", "pin_voltage", "raw_command"];
+var VCI_JOB_KINDS = ["scan", "read_info", "write_serial", "write_bt_name", "write_mac", "switch_mode", "firmware_update", "secret_key", "write_vci_type", "write_version", "pin_voltage", "raw_command", "diag_probe"];
 var VCI_JOB_STATUSES = ["queued", "claimed", "running", "succeeded", "failed", "unconfirmed", "canceled"];
 var VCI_JOB_OUTCOMES = ["succeeded", "failed", "unconfirmed"];
 var VCI_RESULT_VALUE_MAX = 200;
@@ -34695,7 +34716,23 @@ var VciJobParams = {
    * `at` = an AT command to the Bluetooth module (needs a Bluetooth connection); `fx` = a raw FX frame,
    * given as hex "OP P1 [payload…]" (the SEQ and checksum are added). The reply is in `detail.reply_hex`/`reply_text`.
    */
-  raw_command: via({ format: external_exports.enum(["at", "fx"]).default("at"), command: external_exports.string().trim().min(1).max(512), timeout_ms: external_exports.number().int().min(100).max(1e4).default(1500) })
+  raw_command: via({ format: external_exports.enum(["at", "fx"]).default("at"), command: external_exports.string().trim().min(1).max(512), timeout_ms: external_exports.number().int().min(100).max(1e4).default(1500) }),
+  /**
+   * Diagnostic probe (the app-emulator path): relay a list of diagnostic requests onto the vehicle bus
+   * through the VCI and report what each ECU answered. `protocol` picks how a request's access is
+   * classified (OBD-II / UDS-KWP2000 / Honda MCS). `mode` 'read_only' blocks any request classified as a
+   * write (clear/write/routine/reset/session/security) before it is sent. `pass_through` is the FX command
+   * [OP, P1] that tells the VCI to relay a raw bus frame — it has NO default on purpose: it must be the
+   * value confirmed against a real app↔VCI capture, so the job cannot run on a guessed opcode. `probes`
+   * are the request payloads as hex (e.g. "01 0C" for OBD RPM, "22 F1 90" for a UDS DID).
+   */
+  diag_probe: via({
+    protocol: external_exports.enum(["obd", "uds", "mcs"]),
+    mode: external_exports.enum(["read_only", "full"]).default("read_only"),
+    pass_through: external_exports.tuple([external_exports.number().int().min(0).max(255), external_exports.number().int().min(0).max(255)]),
+    probes: external_exports.array(external_exports.string().trim().regex(/^[0-9a-fA-F ]+$/, "hex bytes").min(2).max(512)).min(1).max(32),
+    timeout_ms: external_exports.number().int().min(100).max(1e4).default(1500)
+  })
 };
 var VciJobCreate = external_exports.object({
   bridge_id: Uuid,
@@ -34785,6 +34822,7 @@ function vciSuccessEvidenceMissing(kind, params, result, expected = {}) {
   if (kind === "scan") return result.scan ? null : "the scan result";
   if (kind === "pin_voltage") return result.detail && typeof result.detail.pin_voltage === "object" && !Array.isArray(result.detail.pin_voltage) ? null : "the pin voltages the device reported";
   if (kind === "raw_command") return null;
+  if (kind === "diag_probe") return null;
   const str = (v) => typeof v === "string" ? v : null;
   const target = kind === "write_serial" ? str(params.serial) : kind === "write_bt_name" ? str(params.bt_name) : kind === "write_mac" ? str(params.mac) : kind === "switch_mode" ? str(params.target) : kind === "write_vci_type" ? str(params.vci_type) : kind === "write_version" ? str(params.version) : kind === "firmware_update" ? expected.firmware_version ?? result.new_value ?? null : null;
   return vciEvidenceMissing(kind, { path: "bridge", device: result.device ?? null, detail: result.detail, target, setBtName: kind === "write_serial" && params.set_bt_name !== false, expected });
@@ -39780,6 +39818,83 @@ var VciSession = class _VciSession {
   }
 };
 
+// ../../packages/vci-protocol/src/cbf.ts
+var KEYTABLE = "FoxwellSupplierOfAutomotiveDiagnosticSolutionsIntheAftermarket.";
+var KEYTABLE_BYTES = Uint8Array.from(KEYTABLE, (c) => c.charCodeAt(0));
+
+// ../../packages/vci-protocol/src/diag.ts
+var OBD_MODE_ACCESS = {
+  1: "read",
+  // current data
+  2: "read",
+  // freeze frame
+  3: "read",
+  // stored DTCs
+  4: "write",
+  // clear DTCs + freeze data
+  5: "read",
+  // O2 monitor
+  6: "read",
+  // on-board monitors
+  7: "read",
+  // pending DTCs
+  8: "write",
+  // control on-board component
+  9: "read",
+  // vehicle info (VIN…)
+  10: "read"
+  // permanent DTCs
+};
+var UDS_SERVICE_ACCESS = {
+  16: "write",
+  // DiagnosticSessionControl (can switch to programming session)
+  17: "write",
+  // ECUReset
+  20: "write",
+  // ClearDiagnosticInformation
+  25: "read",
+  // ReadDTCInformation
+  34: "read",
+  // ReadDataByIdentifier
+  35: "read",
+  // ReadMemoryByAddress
+  39: "write",
+  // SecurityAccess
+  40: "write",
+  // CommunicationControl
+  46: "write",
+  // WriteDataByIdentifier
+  47: "write",
+  // InputOutputControlByIdentifier
+  49: "write",
+  // RoutineControl
+  52: "write",
+  // RequestDownload
+  53: "write",
+  // RequestUpload
+  54: "write",
+  // TransferData
+  55: "write",
+  // RequestTransferExit
+  62: "read",
+  // TesterPresent (keep-alive)
+  133: "write"
+  // ControlDTCSetting
+};
+var MCS = {
+  DEST_ECU: 114,
+  DEST_TOOL: 2,
+  BAUD: 10400,
+  INIT: { pullLowMs: 70, idleHighMs: 120, wakeup: Uint8Array.of(254, 4, 255, 255), waitMs: 200 },
+  SERVICE_READ_TABLE: 113
+};
+
+// ../../packages/vci-protocol/src/link-frame.ts
+var HEADER_BLOCK = 12;
+var METHOD_BLOCK = 7;
+var CHECKSUM = 1;
+var LINK_OVERHEAD = HEADER_BLOCK + METHOD_BLOCK + CHECKSUM;
+
 // ../../packages/vci-protocol/src/param-block.ts
 var MAGIC2 = "FOXWELLVERYGOOD";
 var MAGIC_OFF = 528;
@@ -40977,9 +41092,9 @@ async function runVciJob(job, d) {
         if (info.serial !== p.device_serial) throw refuse("wrong_device", `Den anslutna enheten uppger ${info.serial ? `serienummer ${info.serial}` : "inget serienummer"}, inte ${p.device_serial}. Nyckeln har inte skickats.`);
         let blocks;
         try {
-          const hex3 = JSON.parse(await d.identity.open(job.secret_key.sealed, vciKeySealContext(job.id)));
-          if (!Array.isArray(hex3) || hex3.length !== job.secret_key.block_count || !hex3.every((h) => typeof h === "string" && /^([0-9A-Fa-f]{2})+$/.test(h))) throw new Error("unexpected shape");
-          blocks = hex3.map((h) => Uint8Array.from(h.match(/.{2}/g), (x) => parseInt(x, 16)));
+          const hex4 = JSON.parse(await d.identity.open(job.secret_key.sealed, vciKeySealContext(job.id)));
+          if (!Array.isArray(hex4) || hex4.length !== job.secret_key.block_count || !hex4.every((h) => typeof h === "string" && /^([0-9A-Fa-f]{2})+$/.test(h))) throw new Error("unexpected shape");
+          blocks = hex4.map((h) => Uint8Array.from(h.match(/.{2}/g), (x) => parseInt(x, 16)));
         } catch {
           throw refuse("secret_unavailable", "Nyckelpaketen kunde inte \xF6ppnas av den h\xE4r bryggan. Inget har skickats till enheten.");
         }
@@ -41073,6 +41188,26 @@ async function runVciJob(job, d) {
         acting();
         const r2 = await s.requestFrame([bytes[0], bytes[1]], bytes.slice(2), { timeoutMs: p.timeout_ms });
         return { status: "succeeded", detail: { format: "fx", command: toHex2(r2.sent), reply_hex: r2.answer ? toHex2(r2.answer.raw) : "", reply_status: r2.answer ? hexStatus(r2.answer.status) : "inget svar", waited_ms: Math.round(r2.elapsedMs) } };
+      }
+      case "diag_probe": {
+        const p = parsed.data;
+        const s = await openDevice();
+        acting();
+        const accessOf = (first) => p.protocol === "obd" ? OBD_MODE_ACCESS[first] ?? "write" : p.protocol === "uds" ? UDS_SERVICE_ACCESS[first] ?? "write" : "read";
+        const probes = {};
+        let i = 0;
+        for (const hex4 of p.probes) {
+          const bytes = fromHex(hex4);
+          if (!bytes || bytes.length < 1) continue;
+          const key = `p${i++}`;
+          if (p.mode === "read_only" && accessOf(bytes[0]) === "write") {
+            probes[key] = [toHex2(bytes), "blockad (l\xE4s-only)", "blocked", 0];
+            continue;
+          }
+          const r2 = await s.requestFrame([p.pass_through[0], p.pass_through[1]], bytes, { timeoutMs: p.timeout_ms });
+          probes[key] = [toHex2(bytes), r2.answer ? toHex2(r2.answer.raw) : "", r2.answer ? hexStatus(r2.answer.status) : "inget svar", Math.round(r2.elapsedMs)];
+        }
+        return { status: "succeeded", detail: { protocol: p.protocol, mode: p.mode, pass_through: toHex2(Uint8Array.from(p.pass_through)), probe_count: p.probes.length, probes } };
       }
     }
   };
@@ -41308,6 +41443,142 @@ var VciWorker = class _VciWorker {
     await this.deliverPending(true).catch((e) => {
       if (!(e instanceof BridgeRevoked)) log.warn("vci: delivering the result failed", { error: e instanceof Error ? e.message : String(e) });
     });
+  }
+};
+
+// src/drivers/vci/diag-relay.ts
+var hex3 = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0").toUpperCase()).join("");
+var unhex = (s) => {
+  const t = s.replace(/[^0-9a-fA-F]/g, "");
+  const o = new Uint8Array(t.length >> 1);
+  for (let i = 0; i < o.length; i++) o[i] = parseInt(t.substr(2 * i, 2), 16);
+  return o;
+};
+function sendReceive(channel, req, idleMs, timeoutMs) {
+  return new Promise((resolve) => {
+    const chunks = [];
+    let idle;
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      if (idle) clearTimeout(idle);
+      clearTimeout(hard);
+      off();
+      let size = 0;
+      for (const c of chunks) size += c.length;
+      const out = new Uint8Array(size);
+      let at = 0;
+      for (const c of chunks) {
+        out.set(c, at);
+        at += c.length;
+      }
+      resolve(out);
+    };
+    const off = channel.onData((bytes) => {
+      chunks.push(bytes);
+      if (idle) clearTimeout(idle);
+      idle = setTimeout(finish, idleMs);
+    });
+    const hard = setTimeout(finish, timeoutMs);
+    void Promise.resolve(channel.write(req)).catch(() => finish());
+  });
+}
+var DiagRelay = class {
+  d;
+  ws = null;
+  opened = null;
+  queue = Promise.resolve();
+  reconnectTimer;
+  stopped = false;
+  constructor(deps) {
+    this.d = { idleMs: 60, replyTimeoutMs: 3e3, reconnectMs: 5e3, ...deps };
+    if (this.d.token) this.d.log.protect(this.d.token);
+  }
+  start() {
+    this.stopped = false;
+    this.connect();
+  }
+  async stop() {
+    this.stopped = true;
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    try {
+      this.ws?.close();
+    } catch {
+    }
+    this.ws = null;
+    await this.closeChannel();
+  }
+  scheduleReconnect() {
+    if (this.stopped || this.reconnectTimer) return;
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = void 0;
+      this.connect();
+    }, this.d.reconnectMs);
+  }
+  connect() {
+    if (this.stopped) return;
+    const base = this.d.engineWsUrl;
+    const sep = base.includes("?") ? "&" : "?";
+    const url2 = `${base}${sep}role=vci&session=${encodeURIComponent(this.d.session)}${this.d.token ? `&token=${encodeURIComponent(this.d.token)}` : ""}`;
+    const ws = new wrapper_default(url2, { handshakeTimeout: 1e4 });
+    this.ws = ws;
+    ws.on("open", () => this.d.log.info("vci-rel\xE4 anslutet till motorn", { session: this.d.session }));
+    ws.on("message", (raw) => this.onMessage(ws, raw));
+    ws.on("error", (e) => this.d.log.warn("vci-rel\xE4: anslutningsfel", { error: e.message }));
+    ws.on("close", () => {
+      if (this.ws === ws) this.ws = null;
+      void this.closeChannel();
+      if (!this.stopped) {
+        this.d.log.info("vci-rel\xE4: fr\xE5nkopplat, \xE5teransluter", {});
+        this.scheduleReconnect();
+      }
+    });
+  }
+  onMessage(ws, raw) {
+    let m;
+    try {
+      m = JSON.parse(String(raw));
+    } catch {
+      return;
+    }
+    if (m.t !== "tx") return;
+    const frame = unhex(m.hex ?? "");
+    this.queue = this.queue.then(async () => {
+      let reply = new Uint8Array(0);
+      try {
+        const ch = await this.channel();
+        reply = await sendReceive(ch, frame, this.d.idleMs, this.d.replyTimeoutMs);
+      } catch (e) {
+        this.d.log.warn("vci-rel\xE4: fel mot FOX500, tomt svar", { error: e instanceof Error ? e.message : String(e) });
+        await this.closeChannel();
+      }
+      if (ws.readyState === wrapper_default.OPEN) {
+        try {
+          ws.send(JSON.stringify({ t: "rx", hex: hex3(reply) }));
+        } catch {
+        }
+      }
+    });
+  }
+  /** Öppnar FOX500-kanalen lat och återanvänder den. SPP mot målet om satt, annars serieporten. */
+  async channel() {
+    if (this.opened) return this.opened.channel;
+    const t = this.d.transports;
+    const opened = this.d.target && t.openSpp ? await t.openSpp(this.d.target) : await t.openSerial();
+    this.opened = opened;
+    this.d.log.info("vci-rel\xE4: FOX500-kanal \xF6ppen", { via: opened.describe });
+    return opened.channel;
+  }
+  async closeChannel() {
+    const o = this.opened;
+    this.opened = null;
+    if (o) {
+      try {
+        await o.close();
+      } catch {
+      }
+    }
   }
 };
 
@@ -42294,6 +42565,7 @@ var Bridge2 = class {
   gatewayRev = "";
   /** VCI jobs, when the person running the bridge has turned them on. */
   vci = null;
+  diagRelay = null;
   vciTransports;
   /** ESPHome Device Builder's directory, when this bridge has been set up to sync with it. */
   builder;
@@ -42364,7 +42636,9 @@ var Bridge2 = class {
     };
     this.runner = new JobRunner({ api: this.api, journal: this.journal, store: this.store, log: this.log, handlers, deviceAllowed: (id) => this.devices.has(id), keepaliveMs: this.timing.jobKeepaliveMs });
     this.gateway = new Gateway({ config: this.config, policy: this.policy, identity: this.identity, log: this.log, refresh: () => this.requestHeartbeat(), onActivity: () => this.wake?.(), requestDeadlineMs: this.timing.gatewayRequestDeadlineMs });
-    if (this.config.vciEnabled === true) {
+    const relayOn = this.config.vciDiagRelay === true && !!this.config.vciEngineWs;
+    const vciTransports = this.config.vciEnabled === true || relayOn ? this.vciTransports ?? systemTransports({ serialPort: this.config.vciSerialPort ?? null, sppPin: this.config.vciSppPin ?? void 0 }) : null;
+    if (this.config.vciEnabled === true && vciTransports) {
       this.vci = new VciWorker({
         api: this.api,
         store: this.store,
@@ -42373,13 +42647,24 @@ var Bridge2 = class {
         fetch: this.fetchFn,
         downloadHosts: hosts,
         allowHttpDownloads: this.config.devMode,
-        transports: this.vciTransports ?? systemTransports({ serialPort: this.config.vciSerialPort ?? null, sppPin: this.config.vciSppPin ?? void 0 }),
+        transports: vciTransports,
         timings: this.timing.vci,
         scanMs: this.timing.vciScanMs,
         progressIntervalMs: this.timing.vciProgressMs,
         deliveryRetryMs: this.timing.vciDeliveryRetryMs,
         onIdle: () => this.wake?.()
       });
+    }
+    if (relayOn && vciTransports) {
+      this.diagRelay = new DiagRelay({
+        transports: vciTransports,
+        log: this.log.child({ comp: "vci-relay" }),
+        engineWsUrl: this.config.vciEngineWs,
+        token: this.vciRelayToken(),
+        session: this.config.vciRelaySession ?? "default",
+        target: this.config.vciRelayTarget ?? null
+      });
+      this.diagRelay.start();
     }
     this.capabilities = await this.detectCapabilities();
     this.nextCapabilityProbe = Date.now() + (this.timing.capabilityProbeMs ?? 3e5);
@@ -42391,6 +42676,7 @@ var Bridge2 = class {
     this.writeStatus();
     this.runner?.abortAll();
     this.gateway?.shutdown();
+    void this.diagRelay?.stop();
     this.wake?.();
     await this.loop;
     if (this.vci?.busy) {
@@ -42402,6 +42688,16 @@ var Bridge2 = class {
     }
     this.state = "stopped";
     this.writeStatus();
+  }
+  /**
+   * The shared engine token for the diag relay — never a config value (config holds no secrets). From
+   * the data directory file `vci-engine.token`, else the environment variable SMGD_VCI_TOKEN, else none.
+   */
+  vciRelayToken() {
+    const fromFile = this.store.read("vci-engine.token")?.toString("utf8").trim();
+    if (fromFile) return fromFile;
+    const fromEnv = process.env.SMGD_VCI_TOKEN?.trim();
+    return fromEnv ?? "";
   }
   /**
    * What the container health check and a person looking into the data directory can read: the

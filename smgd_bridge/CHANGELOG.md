@@ -1,5 +1,14 @@
 # Ändringslogg
 
+## 0.1.16
+
+- **Diagnostikrelä för fliken "Diagnostik (motor)":** bryggan kan reläa en live-diagnossession mellan SMGD VCI
+  Engine på servern och FOX500:an över Bluetooth (SPP) eller serieport. Motorn gör allt diagnostikarbete; bryggan
+  skickar bara vidare de råa ramarna och återansluter vid avbrott. Av som standard: slå på `vci_diag_relay` och
+  ange `vci_engine_ws` (t.ex. `wss://smgd.se/dev/vci-engine-bridge`), `vci_relay_session` (samma som i fliken,
+  standard `default`) och antingen `vci_relay_target` (FOX500:ans namn eller MAC) eller `vci_serial_port`. Den
+  delade token läggs i datakatalogens fil `vci-engine.token` (eller miljövariabeln `SMGD_VCI_TOKEN`), aldrig här.
+
 ## 0.1.15
 
 - **Paritet med direktanslutningen:** tre nya VCI-jobb så bryggan kan göra samma saker som webbläsaren mot

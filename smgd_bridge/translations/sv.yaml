@@ -53,3 +53,19 @@ configuration:
     name: PIN-kod för VCI över SPP
     description: >-
       Används bara om VCI:n kräver parkoppling för SPP (klassisk Bluetooth) – bryggan försöker först ansluta utan parkoppling, vilket de flesta VCI:er tillåter. Standard 0000. Används bara för jobb med anslutningen SPP.
+  vci_diag_relay:
+    name: Diagnostikrelä (motor)
+    description: >-
+      Relär en live-diagnossession mellan SMGD VCI Engine på servern och FOX500:an över Bluetooth/serie, för fliken "Diagnostik (motor)" i webbappen. Motorn gör allt diagnostikarbete; bryggan skickar bara vidare de råa ramarna. Av som standard och körs bara när motoradressen nedan är satt. Den delade token sätts inte här – lägg den i datakatalogens fil vci-engine.token (eller miljövariabeln SMGD_VCI_TOKEN).
+  vci_engine_ws:
+    name: Motoradress (WebSocket)
+    description: >-
+      Motorns bryggväg, t.ex. wss://smgd.se/dev/vci-engine-bridge. Krävs för diagnostikrelät.
+  vci_relay_session:
+    name: Reläsession
+    description: >-
+      Sessionen som relät ansluter till; måste vara samma som i fliken "Diagnostik (motor)". Standard "default".
+  vci_relay_target:
+    name: FOX500 Bluetooth-mål
+    description: >-
+      FOX500:ans namn eller MAC för klassisk Bluetooth (SPP). Lämna tomt för att använda serieporten ovan i stället.
