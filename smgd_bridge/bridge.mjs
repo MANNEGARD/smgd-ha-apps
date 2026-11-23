@@ -20661,13 +20661,15 @@ function loadConfig(env = process.env) {
     vci_diag_relay: raw.vci_diag_relay ?? (fromEnv("SMGD_VCI_DIAG_RELAY") ? /^(1|true|yes|on)$/i.test(fromEnv("SMGD_VCI_DIAG_RELAY")) : void 0),
     vci_engine_ws: (typeof raw.vci_engine_ws === "string" && raw.vci_engine_ws.trim() !== "" ? raw.vci_engine_ws.trim() : void 0) ?? fromEnv("SMGD_VCI_ENGINE_WS"),
     vci_relay_session: (typeof raw.vci_relay_session === "string" && raw.vci_relay_session.trim() !== "" ? raw.vci_relay_session.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_SESSION"),
-    vci_relay_target: (typeof raw.vci_relay_target === "string" && raw.vci_relay_target.trim() !== "" ? raw.vci_relay_target.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_TARGET")
+    vci_relay_target: (typeof raw.vci_relay_target === "string" && raw.vci_relay_target.trim() !== "" ? raw.vci_relay_target.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_TARGET"),
+    // an empty password field means "no token here" (the file or SMGD_VCI_TOKEN may still give one)
+    vci_engine_token: typeof raw.vci_engine_token === "string" && raw.vci_engine_token.trim() !== "" ? raw.vci_engine_token.trim() : void 0
   };
   for (const key of ["allowed_networks", "download_hosts"]) if (Array.isArray(merged[key]) && merged[key].length === 0) delete merged[key];
   const parsed = Options.safeParse(Object.fromEntries(Object.entries(merged).filter(([, v]) => v !== void 0)));
   if (!parsed.success) {
     const first = parsed.error.issues[0];
-    throw new ConfigError(first?.path[0] === "api_url" ? "api_url is required: the address of the SMGD Developer Lab API (https://\u2026/functions/v1/api)" : `Invalid option ${first?.path.join(".")}: ${first?.message}`);
+    throw new ConfigError(first?.path[0] === "api_url" ? "api_url is required: the address of the SMGD Developer Lab API (https://\u2026/functions/v1/api)" : first?.path[0] === "vci_engine_token" ? "Invalid option vci_engine_token: at least 16 characters, no spaces" : `Invalid option ${first?.path.join(".")}: ${first?.message}`);
   }
   const o = parsed.data;
   const unreadable = o.allowed_networks.find((n) => parseCidr(n) === null);
@@ -20700,6 +20702,7 @@ function loadConfig(env = process.env) {
     vciEngineWs: o.vci_engine_ws ?? null,
     vciRelaySession: o.vci_relay_session,
     vciRelayTarget: o.vci_relay_target ?? null,
+    vciEngineToken: o.vci_engine_token ?? null,
     aresBinDir: existsSync(`${aresDir}/ares-install`) ? aresDir : null,
     homeAssistant: supervisor ? { url: fromEnv("SMGD_HA_URL") ?? "http://supervisor/core/api", wsUrl: fromEnv("SMGD_HA_WS_URL") ?? "ws://supervisor/core/websocket", token: supervisor } : null,
     devMode,
@@ -20712,7 +20715,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.16";
+    BRIDGE_VERSION = "0.1.17";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -20767,8 +20770,8 @@ var init_config = __esm({
       /**
        * Whether this bridge relays a live diagnostic session between SMGD VCI Engine (on the VPS) and the
        * FOX500 over Bluetooth/serial ("Diagnostik (motor)" in the web app). Off by default; it only runs
-       * when `vci_engine_ws` is also set. The token is NOT a config value: it is read from the data
-       * directory file `vci-engine.token` or the environment variable SMGD_VCI_TOKEN.
+       * when `vci_engine_ws` is also set. The token comes from `vci_engine_token` below, else the data
+       * directory file `vci-engine.token`, else the environment variable SMGD_VCI_TOKEN.
        */
       vci_diag_relay: external_exports.boolean().default(false),
       /** The engine's bridge WebSocket, e.g. wss://smgd.se/dev/vci-engine-bridge. Required for the relay. */
@@ -20776,7 +20779,9 @@ var init_config = __esm({
       /** The session the relay joins; must match the one chosen in the web tab. Default "default". */
       vci_relay_session: external_exports.string().min(1).max(64).default("default"),
       /** SPP target (name or MAC) for the FOX500; empty uses the configured serial port instead. */
-      vci_relay_target: external_exports.string().max(200).optional()
+      vci_relay_target: external_exports.string().max(200).optional(),
+      /** The engine's shared token (SMGD_VCI_TOKEN on the VPS), as a masked password field in Home Assistant. Never logged. */
+      vci_engine_token: external_exports.string().min(16).max(512).regex(/^\S+$/, "must not contain spaces").optional()
     });
     ConfigError = class extends Error {
     };
@@ -34648,11 +34653,19 @@ var VciFoxwellItem = external_exports.object({
   soft_type: external_exports.string(),
   version: external_exports.string(),
   size_bytes: external_exports.number().int(),
-  /** Extra uppgifter från soft_search_v2 (belagda 2026-11-22); utelämnade när Foxwell inte ger dem. */
+  /** Extra uppgifter från soft_search_v2; utelämnade/null när Foxwell inte ger dem. */
   release_date: external_exports.string().nullish(),
   update_tips: external_exports.string().nullish(),
   package_type: external_exports.string().nullish(),
-  patch_version: external_exports.string().nullish()
+  lang_code: external_exports.string().nullish(),
+  languages: external_exports.string().nullish(),
+  expire_time: external_exports.string().nullish(),
+  is_subscrip: external_exports.boolean().nullish(),
+  status: external_exports.string().nullish(),
+  version_history: external_exports.string().nullish(),
+  get patch_version() {
+    return external_exports.array(VciFoxwellItem).max(20);
+  }
 });
 var VciFoxwellSearchResult = external_exports.object({ items: external_exports.array(VciFoxwellItem) });
 var VCI_FOXWELL_IMPORT_MAX = 5;
@@ -34662,8 +34675,102 @@ var VciFoxwellImportResult = external_exports.object({
   skipped: external_exports.array(external_exports.object({ id: external_exports.number().int(), software: external_exports.string(), reason: external_exports.string(), duplicate: external_exports.boolean().optional() }))
 });
 var VciFoxwellCarLinks = external_exports.object({ serial: Serial2, ids: external_exports.array(external_exports.number().int()).min(1).max(20) });
-var VciFoxwellCarLink = external_exports.object({ id: external_exports.number().int(), software: external_exports.string(), url: external_exports.string(), filename: external_exports.string(), md5_base64: external_exports.string().nullable() });
-var VciFoxwellCarLinkList = external_exports.object({ items: external_exports.array(VciFoxwellCarLink) });
+var FOXWELL_PART_ROLES = ["MAIN", "PATCH", "COMTXTLIB"];
+var VciFoxwellCarLink = external_exports.object({
+  id: external_exports.number().int(),
+  role: external_exports.enum(FOXWELL_PART_ROLES),
+  soft_id: external_exports.string(),
+  version: external_exports.string(),
+  software: external_exports.string(),
+  url: external_exports.string(),
+  filename: external_exports.string(),
+  /** Foxwell's value as given (normally base64); null for packages without one (CAR packages may lack it). */
+  md5_base64: external_exports.string().nullable(),
+  /** The same as lower-case hex, when it is a checkable MD5. */
+  md5_hex: external_exports.string().nullable(),
+  size_bytes: external_exports.number().int()
+});
+var VciFoxwellCarLinkList = external_exports.object({
+  items: external_exports.array(VciFoxwellCarLink),
+  /** When the links stop working (ISO), from `out_time`; null when Foxwell does not say. */
+  expires_at: external_exports.string().nullable(),
+  /** Parts Foxwell gave no link for (e.g. no subscription for a PATCH). */
+  missing: external_exports.array(external_exports.object({ id: external_exports.number().int(), role: external_exports.enum(FOXWELL_PART_ROLES), filename: external_exports.string() }))
+});
+var VCI_DOWNLOAD_STATUSES = ["queued", "claimed", "running", "succeeded", "failed", "canceled"];
+var Lang = external_exports.string().regex(/^[a-z]{2,3}$/);
+var VciVpsDownloadCreate = external_exports.object({ serial: Serial2, id: external_exports.number().int(), lang: Lang.default("en") });
+var VciDownloadPart = external_exports.object({
+  id: external_exports.number().int(),
+  role: external_exports.enum(FOXWELL_PART_ROLES),
+  soft_id: external_exports.string(),
+  version: external_exports.string(),
+  filename: external_exports.string(),
+  size_bytes: external_exports.number().int()
+});
+var VciDownloadProgress = external_exports.object({
+  phase: external_exports.enum(["links", "download", "verify", "unpack", "validate", "install"]),
+  /** The part being worked on (its file name) – never a URL. */
+  part: external_exports.string().max(120).nullable(),
+  done_bytes: external_exports.number().int().nonnegative(),
+  total_bytes: external_exports.number().int().nonnegative(),
+  message: external_exports.string().max(300).nullable()
+});
+var VciDownloadResult = external_exports.object({
+  status: external_exports.enum(["succeeded", "failed"]),
+  /** Installed paths, relative to the data root (e.g. `VOLVO/V4.57.005`, `voldata/Public`). */
+  installed: external_exports.array(external_exports.string().max(200)).max(10),
+  /** Per part: whether the MD5 was checked (false = Foxwell gave none; logged). */
+  md5: external_exports.array(external_exports.object({ filename: external_exports.string(), checked: external_exports.boolean() })).max(30),
+  validation: external_exports.string().max(500),
+  files: external_exports.number().int().nonnegative()
+});
+var VciVpsDownload = external_exports.object({
+  id: external_exports.uuid(),
+  serial: external_exports.string(),
+  soft_id: external_exports.string(),
+  version: external_exports.string(),
+  lang: external_exports.string(),
+  target: external_exports.string(),
+  parts: external_exports.array(VciDownloadPart),
+  status: external_exports.enum(VCI_DOWNLOAD_STATUSES),
+  progress: VciDownloadProgress.nullable(),
+  result: VciDownloadResult.nullable(),
+  error_message: external_exports.string().nullable(),
+  created_at: Timestamp,
+  completed_at: Timestamp.nullable()
+});
+var VciVpsDownloadList = external_exports.object({
+  items: external_exports.array(VciVpsDownload),
+  /** Whether a download service is configured on the server (the worker token is set). */
+  worker_configured: external_exports.boolean()
+});
+var VciWorkerPart = VciDownloadPart.extend({
+  url: external_exports.string(),
+  /** Expected MD5 as Foxwell gave it (base64 or hex); null = none, the check is skipped and logged. */
+  md5: external_exports.string().nullable(),
+  /** Relative target directory under the data root: `<BRAND>/<ver>` or `voldata/Public`. */
+  target: external_exports.string()
+});
+var VciWorkerJob = external_exports.object({
+  id: external_exports.uuid(),
+  lease_id: external_exports.uuid(),
+  soft_id: external_exports.string(),
+  version: external_exports.string(),
+  lang: external_exports.string(),
+  parts: external_exports.array(VciWorkerPart),
+  /** ms since the epoch when the links stop working; null when unknown. */
+  links_expire_at: external_exports.number().nullable()
+});
+var VciWorkerClaimResult = external_exports.object({ job: VciWorkerJob.nullable() });
+var VciWorkerLease = external_exports.object({ lease_id: external_exports.uuid() });
+var VciWorkerLinksResult = external_exports.object({ parts: external_exports.array(VciWorkerPart), links_expire_at: external_exports.number().nullable() });
+var VciWorkerProgressReport = external_exports.object({ lease_id: external_exports.uuid(), progress: VciDownloadProgress });
+var VciWorkerComplete = external_exports.object({
+  lease_id: external_exports.uuid(),
+  result: VciDownloadResult,
+  error_message: external_exports.string().max(1e3).nullable()
+});
 var VciFoxwellFields = external_exports.object({ fields: external_exports.record(external_exports.string(), external_exports.union([external_exports.string(), external_exports.number(), external_exports.boolean(), external_exports.null()])) });
 var VciFoxwellSerialStatus = external_exports.object({ serial: external_exports.string().min(3).max(64).regex(/^[A-Za-z0-9]+$/) });
 
@@ -35009,6 +35116,13 @@ var Routes = {
   vciFoxwellSerialStatus: r({ id: "vciFoxwellSerialStatus", method: "POST", path: "/v1/vci/foxwell/serial-status", tag: "vci", summary: "Lock/subscription status for a serial on the account", auth: "user", role: "admin", body: VciFoxwellSerialStatus, response: VciFoxwellFields, rateLimit: { max: 30, windowSec: 60 } }),
   vciFoxwellAccount: r({ id: "vciFoxwellAccount", method: "POST", path: "/v1/vci/foxwell/account-info", tag: "vci", summary: "The Foxwell account profile", auth: "user", role: "admin", response: VciFoxwellFields, rateLimit: { max: 30, windowSec: 60 } }),
   vciFoxwellCarLinks: r({ id: "vciFoxwellCarLinks", method: "POST", path: "/v1/vci/foxwell/car-links", tag: "vci", summary: "Short-lived download links for car modules", auth: "user", role: "admin", body: VciFoxwellCarLinks, response: VciFoxwellCarLinkList, audit: "vci.foxwell_car_links", rateLimit: { max: 30, windowSec: 60 } }),
+  vciVpsDownloads: r({ id: "vciVpsDownloads", method: "GET", path: "/v1/vci/foxwell/vps-downloads", tag: "vci", summary: "Recent downloads to the VPS (status and progress)", auth: "user", role: "admin", response: VciVpsDownloadList }),
+  vciVpsDownloadCreate: r({ id: "vciVpsDownloadCreate", method: "POST", path: "/v1/vci/foxwell/vps-downloads", tag: "vci", summary: "Download a complete package (MAIN+PATCH+COMTXTLIB) to the VCI Engine on the VPS", auth: "user", role: "admin", body: VciVpsDownloadCreate, response: VciVpsDownload, status: 201, audit: "vci.foxwell_vps_download", rateLimit: { max: 20, windowSec: 600 } }),
+  vciVpsDownloadCancel: r({ id: "vciVpsDownloadCancel", method: "POST", path: "/v1/vci/foxwell/vps-downloads/:id/cancel", tag: "vci", summary: "Cancel a VPS download that has not finished", auth: "user", role: "admin", params: IdParams2, response: VciVpsDownload, audit: "vci.foxwell_vps_download_cancel" }),
+  vciWorkerClaim: r({ id: "vciWorkerClaim", method: "POST", path: "/v1/vci/worker/claim", tag: "vci-worker", summary: "Download service: claim the next job, with fresh signed links", auth: "worker", response: VciWorkerClaimResult, rateLimit: { max: 120, windowSec: 60 } }),
+  vciWorkerLinks: r({ id: "vciWorkerLinks", method: "POST", path: "/v1/vci/worker/jobs/:id/links", tag: "vci-worker", summary: "Download service: new signed links when the old ones expired", auth: "worker", params: IdParams2, body: VciWorkerLease, response: VciWorkerLinksResult, rateLimit: { max: 30, windowSec: 60 } }),
+  vciWorkerProgress: r({ id: "vciWorkerProgress", method: "POST", path: "/v1/vci/worker/jobs/:id/progress", tag: "vci-worker", summary: "Download service: report progress (extends the lease)", auth: "worker", params: IdParams2, body: VciWorkerProgressReport, response: Ok, rateLimit: { max: 240, windowSec: 60 } }),
+  vciWorkerComplete: r({ id: "vciWorkerComplete", method: "POST", path: "/v1/vci/worker/jobs/:id/complete", tag: "vci-worker", summary: "Download service: finish a job with what was installed", auth: "worker", params: IdParams2, body: VciWorkerComplete, response: Ok, rateLimit: { max: 60, windowSec: 60 } }),
   vciSecretKeyRelease: r({ id: "vciSecretKeyRelease", method: "POST", path: "/v1/vci/secret-key/release", tag: "vci", summary: "Hand the key blocks to an administrator for one write to a named device", auth: "user", role: "admin", body: VciSecretKeyRelease, response: VciSecretKeyBlocks, audit: "vci.secret_key_release", rateLimit: { max: 20, windowSec: 600 } }),
   // VCI jobs carried out by a bridge (no terminal on this path: a fixed set of job kinds)
   vciJobCreate: r({ id: "vciJobCreate", method: "POST", path: "/v1/vci/jobs", tag: "vci", summary: "Order a bridge to carry out a VCI job locally", auth: "user", role: "admin", body: VciJobCreate, response: VciJob, status: 201, audit: "vci.job_create", rateLimit: { max: 60, windowSec: 60 } }),
@@ -41497,6 +41611,7 @@ var DiagRelay = class {
   }
   start() {
     this.stopped = false;
+    if (!this.d.token) this.d.log.warn("vci-rel\xE4: ingen motortoken \u2013 motorn nekar bryggan om den kr\xE4ver en (s\xE4tt vci_engine_token)", {});
     this.connect();
   }
   async stop() {
@@ -41509,12 +41624,12 @@ var DiagRelay = class {
     this.ws = null;
     await this.closeChannel();
   }
-  scheduleReconnect() {
+  scheduleReconnect(delayMs = this.d.reconnectMs) {
     if (this.stopped || this.reconnectTimer) return;
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = void 0;
       this.connect();
-    }, this.d.reconnectMs);
+    }, delayMs);
   }
   connect() {
     if (this.stopped) return;
@@ -41526,13 +41641,17 @@ var DiagRelay = class {
     ws.on("open", () => this.d.log.info("vci-rel\xE4 anslutet till motorn", { session: this.d.session }));
     ws.on("message", (raw) => this.onMessage(ws, raw));
     ws.on("error", (e) => this.d.log.warn("vci-rel\xE4: anslutningsfel", { error: e.message }));
-    ws.on("close", () => {
+    ws.on("close", (code) => {
       if (this.ws === ws) this.ws = null;
       void this.closeChannel();
-      if (!this.stopped) {
-        this.d.log.info("vci-rel\xE4: fr\xE5nkopplat, \xE5teransluter", {});
-        this.scheduleReconnect();
+      if (this.stopped) return;
+      if (code === 1008) {
+        this.d.log.warn("vci-rel\xE4: motorn nekade bryggan (fel eller saknad token \u2013 kontrollera vci_engine_token); f\xF6rs\xF6ker igen om en minut", {});
+        this.scheduleReconnect(Math.max(this.d.reconnectMs, 6e4));
+        return;
       }
+      this.d.log.info("vci-rel\xE4: fr\xE5nkopplat, \xE5teransluter", { code });
+      this.scheduleReconnect();
     });
   }
   onMessage(ws, raw) {
@@ -42690,10 +42809,12 @@ var Bridge2 = class {
     this.writeStatus();
   }
   /**
-   * The shared engine token for the diag relay — never a config value (config holds no secrets). From
-   * the data directory file `vci-engine.token`, else the environment variable SMGD_VCI_TOKEN, else none.
+   * The shared engine token for the diag relay: the masked option `vci_engine_token` (the only way to set
+   * it from Home Assistant's interface), else the data directory file `vci-engine.token`, else the
+   * environment variable SMGD_VCI_TOKEN, else none. The relay masks it in every log line.
    */
   vciRelayToken() {
+    if (this.config.vciEngineToken) return this.config.vciEngineToken;
     const fromFile = this.store.read("vci-engine.token")?.toString("utf8").trim();
     if (fromFile) return fromFile;
     const fromEnv = process.env.SMGD_VCI_TOKEN?.trim();

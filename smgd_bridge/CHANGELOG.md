@@ -1,5 +1,13 @@
 # Ändringslogg
 
+## 0.1.17
+
+- **Motortoken i inställningarna:** den delade token för diagnostikrelät anges nu i fältet *Motortoken*
+  (`vci_engine_token`, dolt som ett lösenord) i stället för i en fil i appens datakatalog, som inte går att nå från
+  Home Assistant. Filen `vci-engine.token` och miljövariabeln `SMGD_VCI_TOKEN` fungerar fortfarande som reserv.
+- **Tydligt besked när motorn nekar bryggan:** saknas token eller är den fel säger loggen det rakt ut, och bryggan
+  försöker igen efter en minut i stället för var femte sekund.
+
 ## 0.1.16
 
 - **Diagnostikrelä för fliken "Diagnostik (motor)":** bryggan kan reläa en live-diagnossession mellan SMGD VCI

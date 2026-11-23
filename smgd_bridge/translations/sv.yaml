@@ -56,7 +56,7 @@ configuration:
   vci_diag_relay:
     name: Diagnostikrelä (motor)
     description: >-
-      Relär en live-diagnossession mellan SMGD VCI Engine på servern och FOX500:an över Bluetooth/serie, för fliken "Diagnostik (motor)" i webbappen. Motorn gör allt diagnostikarbete; bryggan skickar bara vidare de råa ramarna. Av som standard och körs bara när motoradressen nedan är satt. Den delade token sätts inte här – lägg den i datakatalogens fil vci-engine.token (eller miljövariabeln SMGD_VCI_TOKEN).
+      Relär en live-diagnossession mellan SMGD VCI Engine på servern och FOX500:an över Bluetooth/serie, för fliken "Diagnostik (motor)" i webbappen. Motorn gör allt diagnostikarbete; bryggan skickar bara vidare de råa ramarna. Av som standard och körs bara när motoradressen nedan är satt. Den delade token anges i fältet Motortoken nedan.
   vci_engine_ws:
     name: Motoradress (WebSocket)
     description: >-
@@ -69,3 +69,8 @@ configuration:
     name: FOX500 Bluetooth-mål
     description: >-
       FOX500:ans namn eller MAC för klassisk Bluetooth (SPP). Lämna tomt för att använda serieporten ovan i stället.
+
+  vci_engine_token:
+    name: Motortoken
+    description: >-
+      Den delade token som motorn kräver (SMGD_VCI_TOKEN i serverns secrets/vci-engine.env). Visas dold och skrivs aldrig i loggen. Utan den nekar motorn bryggan.

@@ -56,7 +56,7 @@ configuration:
   vci_diag_relay:
     name: Diagnostic relay (motor)
     description: >-
-      Relays a live diagnostic session between SMGD VCI Engine on the server and the FOX500 over Bluetooth/serial, for the "Diagnostik (motor)" tab in the web app. The engine does all the diagnostic work; the bridge only forwards the raw frames. Off by default and only runs when the engine address below is set. The shared token is not set here – put it in the data directory file vci-engine.token (or the SMGD_VCI_TOKEN environment variable).
+      Relays a live diagnostic session between SMGD VCI Engine on the server and the FOX500 over Bluetooth/serial, for the "Diagnostik (motor)" tab in the web app. The engine does all the diagnostic work; the bridge only forwards the raw frames. Off by default and only runs when the engine address below is set. The shared token goes in the Engine token field below.
   vci_engine_ws:
     name: Engine address (WebSocket)
     description: >-
@@ -69,3 +69,7 @@ configuration:
     name: FOX500 Bluetooth target
     description: >-
       The FOX500's name or MAC for classic Bluetooth (SPP). Leave empty to use the serial port above instead.
+  vci_engine_token:
+    name: Engine token
+    description: >-
+      The shared token the engine requires (SMGD_VCI_TOKEN in the server's secrets/vci-engine.env). Shown hidden and never written to the log. Without it the engine refuses the bridge.
