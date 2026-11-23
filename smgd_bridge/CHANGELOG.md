@@ -1,5 +1,20 @@
 # Ändringslogg
 
+## 0.1.19
+
+- **Diagnostikrelät tar emot hela svar:** svaret från VCI:n skickas vidare när en hel svarsram har kommit, i
+  stället för när det varit tyst en stund. Över Bluetooth (BLE) kommer ett svar i små bitar, och ett svar kunde
+  tidigare kapas mitt i. Rester från en tidigare ram och svar på en äldre fråga hoppas över.
+- **Motorns egen väntetid gäller:** varje ram bär hur länge motorn väntar på svaret, och relät väntar lika länge
+  (i stället för alltid högst 3 sekunder). Svaret märks med ramens löpnummer, så att ett sent svar aldrig tas för
+  svaret på nästa fråga. En ram som blivit liggande längre än motorn väntar skickas inte till VCI:n.
+- **VCI:n ansluts i förväg:** relät öppnar anslutningen till VCI:n så snart det nått motorn, så att första ramen
+  inte går förlorad medan Bluetooth kopplar upp. Går VCI:n inte att nå görs ett nytt försök vid nästa ram.
+- **Relät presenterar sig för motorn** (bryggans version, anslutningssätt och VCI:ns Bluetooth-namn), så att
+  sidan "Diagnostik (motor)" kan visa vilken brygga som är ansluten.
+- **Tydligare besked:** när en annan brygga eller ett annat relä tar över samma session, eller när motorn inte
+  godtar sessionsnamnet, säger loggen det och relät väntar en minut före nästa försök.
+
 ## 0.1.18
 
 - **Välj hur reläet når VCI:n:** nytt fält *VCI-anslutning* (`vci_relay_transport`: `ble`, `spp` eller `serial`).

@@ -20717,7 +20717,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.18";
+    BRIDGE_VERSION = "0.1.19";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -38528,12 +38528,23 @@ function asciiBytes(text) {
 
 // ../../packages/vci-protocol/src/commands.ts
 var CMD = {
+  /** Not in any of the three vendor apps (GT60, i80II, TS7000): this one comes from the owner's older app. */
   GET_BT_NAME: [1, 1],
   GET_VERSION: [4, 1],
   GET_SERIAL: [5, 1],
   GET_PRODUCT_TYPE: [7, 1],
   GET_BT_MAC: [9, 1],
+  /**
+   * The manufacturing date, ASCII (the apps format it as YYYYMMDD). Parameter-block field 0x12, length-prefixed.
+   * None of the three apps can write it (their "factory time" writes a file on the scan tablet itself); the
+   * firmware can – see SET_MADE_DATE.
+   */
   GET_MADE_DATE: [10, 1],
+  /**
+   * FIRMWARE ONLY (FOX500 V1.07.009, app handler 0x638C0): an extended information/hardware block, about 0x40B
+   * bytes. No app sends it; not tried on a device.
+   */
+  GET_EXT_INFO: [11, 1],
   ENTER_BOOT: [1, 5],
   /**
    * {2,5} carries two commands, told apart by the payload: 00 = read the current mode (the app's
@@ -38541,19 +38552,62 @@ var CMD = {
    * mode (enterAppMode). GT60's firmware has no mode read.
    */
   MODE: [2, 5],
+  /**
+   * The apps send it during a firmware update. In the FOX500 firmware it does nothing: the application has no
+   * handler for it and the bootloader's (0x1270) only acknowledges – the version shown comes from the firmware
+   * file's header. (Found in the firmware 2026-11-23; `writeVersion` here still treats it as a write.)
+   */
   SET_VERSION: [3, 5],
   SET_SERIAL: [4, 5],
   ENTER_BIN_UPGRADE: [5, 5],
   WRITE_TOTAL_LENGTH: [6, 5],
   WRITE_CRC32: [7, 5],
   WRITE_BIN_DATA: [8, 5],
+  /**
+   * FIRMWARE ONLY: write the manufacturing date – {11,5}, payload the date as ASCII text, fewer than 16
+   * characters, stored length-prefixed at parameter-block field 0x12 (application handler 0x63C80, bootloader
+   * 0x1AF4). No app sends it and it has not been tried on a device; read it back with GET_MADE_DATE. Whether the
+   * value reaches the sealed block at 0x5A000 without a later reseal is not known.
+   */
+  SET_MADE_DATE: [11, 5],
   /** The vendor app's constant is {12, 5} in DECIMAL, i.e. 0C 05. */
   SET_VCI_TYPE: [12, 5],
+  /** FIRMWARE ONLY: read the one-byte flag at parameter-block field 0x90 (app handler 0x63E30). Not tried on a device. */
+  READ_FLAG_90: [0, 15],
+  /** Read the type of the device's crypto IC (the app's factory tool: "读加密IC类型"); payload 00. */
   GET_IC_TYPE: [4, 15],
-  /** Pin voltage {10,0}; the request carries a 16-byte payload (see encodeReadPinVoltage). */
+  /**
+   * FIRMWARE ONLY: the answer is the whole working copy of the parameter block (0x200 bytes from 0x18000) – the
+   * serial number and the key/signature field included, raw. Application handler 0x60530. Not tried on a device.
+   */
+  DUMP_WORK_PAGE: [6, 15],
+  /** FIRMWARE ONLY: as DUMP_WORK_PAGE, for the sealed block at 0x5A000 (application handler 0x6053C). */
+  DUMP_SEALED_BLOCK: [7, 15],
+  /**
+   * Write the crypto IC type – the factory tool's writeIcType, fixed payload 02, answer a status word (i80II and
+   * TS7000; GT60 has neither this nor GET_IC_TYPE). In the firmware it writes the one-byte flag at
+   * parameter-block field 0xC0 (application handler 0x63D14; the value is 02 on the owner's device). No
+   * operation here sends it, and it has not been tried on a device.
+   */
+  WRITE_IC_TYPE: [8, 15],
+  /**
+   * {10,0} is the VCI's "ioctl": the payload says what is asked. Two are in the apps: pin voltage (16 bytes, see
+   * encodeReadPinVoltage) and battery voltage (12 bytes, see batteryVoltagePayload). The diagnostic engine
+   * sends others of its own.
+   */
   GET_PIN_VOLTAGE: [10, 0],
+  /**
+   * The "secret key". Not a key: the 17 packets are a small program for the device's crypto IC – one start
+   * packet (F0 F6 00 00), 15 blocks of ARM Thumb code loaded at 0x8000–0x83B0 (F0 F4 <addr> <len> <data>) and one
+   * packet that runs it (F0 F6 00 02 + 8 bytes). The same constant in i80II and TS7000, not unique to a device.
+   * The apps send it only from their factory tool, as the step before the serial number is written; nothing
+   * reads it back or checks it afterwards. Treated here as opaque blocks.
+   * In the FOX500 firmware (application handler 0x605E2, application mode only; the bootloader has none) each
+   * packet is passed on, bit by bit over a GPIO line, to a companion chip, and the answer is checked for 90 00;
+   * nothing is written to flash or to the parameter block.
+   */
   WRITE_SECRET_KEY: [5, 15],
-  /** K-line factory serial-burn mode: payload 01 = enter, 00 = exit (the app's only other {x,15}). */
+  /** K-line factory serial-burn mode: payload 01 = enter, 00 = exit. */
   KLINE_MODE: [9, 15]
 };
 var MODE_BYTES = { 5: "boot", 2: "app", 3: "ageing", 4: "tooling" };
@@ -40012,6 +40066,56 @@ var HEADER_BLOCK = 12;
 var METHOD_BLOCK = 7;
 var CHECKSUM = 1;
 var LINK_OVERHEAD = HEADER_BLOCK + METHOD_BLOCK + CHECKSUM;
+
+// ../../packages/vci-protocol/src/diag-ui.ts
+var DIAG_BUTTON = {
+  /** ButtonReplyData.replyExit – finns i appen men anropas aldrig därifrån. */
+  EXIT: 2147483647,
+  /** ButtonReplyData.replyBack / buildBack. */
+  BACK: 2147483646,
+  /** NormalMenuReplyData.buildHelpInfo, DataStreamReplyData.replyHelp, DTCReplyData.replyHelper. */
+  HELP: 2147483644,
+  /** AutoVIN-dialogens knapp (j.h.l.n.d). */
+  AUTOVIN_CANCEL: 2147483640,
+  /** DataStreamReplyData/AutoScanReplyData.replyPause. */
+  PAUSE: 2147483635,
+  /** DataStreamReplyData/AutoScanReplyData.replyContinue. */
+  CONTINUE: 2147483634,
+  /** DataStreamReplyData.prevChannel (VWDS). */
+  PREV_CHANNEL: 2147483618,
+  /** DataStreamReplyData.nextChannel (VWDS). */
+  NEXT_CHANNEL: 2147483617,
+  /** AutoScanReplyData.findReport. */
+  AS_REPORT: 2147483604,
+  /** DTCReplyData.replyClear. */
+  DTC_CLEAR: 2147483603,
+  /** AutoScanReplyData.replyEraseDTC. */
+  AS_ERASE_DTC: 2147483602,
+  /** DTCReplyData.replyFreezeFrame. */
+  DTC_FREEZE_FRAME: 2147483601
+};
+var BTN_BACK = DIAG_BUTTON.BACK;
+
+// ../../packages/vci-protocol/src/engine-ws.ts
+function findFxReply(received, requestSeq) {
+  for (let i = 0; i + 10 <= received.length; i++) {
+    if (received[i] !== 88 || received[i + 1] !== 70) continue;
+    const size = 10 + (received[i + 7] | received[i + 8] << 8);
+    if (i + size > received.length) continue;
+    let sum = 0;
+    for (let k = i; k < i + size - 1; k++) sum = sum + received[k] & 255;
+    if (sum !== received[i + size - 1]) continue;
+    if (received[i + 4] !== (requestSeq & 255)) {
+      i += size - 1;
+      continue;
+    }
+    return received.slice(i, i + size);
+  }
+  return null;
+}
+function fxRequestSeq(frame) {
+  return frame.length >= 10 && frame[0] === 70 && frame[1] === 88 ? frame[4] : null;
+}
 
 // ../../packages/vci-protocol/src/param-block.ts
 var MAGIC2 = "FOXWELLVERYGOOD";
@@ -41565,6 +41669,10 @@ var VciWorker = class _VciWorker {
 };
 
 // src/drivers/vci/diag-relay.ts
+init_config();
+var MIN_REPLY_MS = 100;
+var MAX_REPLY_MS = 2e4;
+var SLOW_RETRY_MS = 6e4;
 var hex3 = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0").toUpperCase()).join("");
 var unhex = (s) => {
   const t = s.replace(/[^0-9a-fA-F]/g, "");
@@ -41572,45 +41680,67 @@ var unhex = (s) => {
   for (let i = 0; i < o.length; i++) o[i] = parseInt(t.substr(2 * i, 2), 16);
   return o;
 };
-function sendReceive(channel, req, idleMs, timeoutMs) {
+var EMPTY = new Uint8Array(0);
+function exchange(channel, req, o) {
   return new Promise((resolve) => {
-    const chunks = [];
-    let idle;
+    const seq = fxRequestSeq(req);
+    const timers = {};
+    const listener = {};
+    let buf = EMPTY;
     let settled = false;
-    const finish = () => {
+    const finish = (reply, end) => {
       if (settled) return;
       settled = true;
-      if (idle) clearTimeout(idle);
-      clearTimeout(hard);
-      off();
-      let size = 0;
-      for (const c of chunks) size += c.length;
-      const out = new Uint8Array(size);
-      let at = 0;
-      for (const c of chunks) {
-        out.set(c, at);
-        at += c.length;
-      }
-      resolve(out);
+      clearTimeout(timers.idle);
+      clearTimeout(timers.hard);
+      clearTimeout(timers.write);
+      listener.off?.();
+      resolve({ reply, end, received: buf.length });
     };
-    const off = channel.onData((bytes) => {
-      chunks.push(bytes);
-      if (idle) clearTimeout(idle);
-      idle = setTimeout(finish, idleMs);
+    listener.off = channel.onData((bytes) => {
+      if (settled || bytes.length === 0) return;
+      const next = new Uint8Array(buf.length + bytes.length);
+      next.set(buf, 0);
+      next.set(bytes, buf.length);
+      buf = next;
+      if (seq !== null) {
+        const frame = findFxReply(buf, seq);
+        if (frame) finish(frame, "frame");
+        return;
+      }
+      clearTimeout(timers.idle);
+      timers.idle = setTimeout(() => finish(buf, "idle"), o.idleMs);
     });
-    const hard = setTimeout(finish, timeoutMs);
-    void Promise.resolve(channel.write(req)).catch(() => finish());
+    if (settled) {
+      listener.off();
+      return;
+    }
+    timers.write = setTimeout(() => finish(EMPTY, "write_failed"), o.writeTimeoutMs);
+    Promise.resolve().then(() => channel.write(req)).then(
+      () => {
+        clearTimeout(timers.write);
+        if (settled) return;
+        timers.hard = setTimeout(() => finish(seq !== null ? EMPTY : buf, "timeout"), o.timeoutMs);
+      },
+      () => finish(EMPTY, "write_failed")
+    );
   });
 }
 var DiagRelay = class {
   d;
   ws = null;
   opened = null;
+  opening = null;
+  /** Räknas upp varje gång kanalen ska stängas: en öppning som blir klar efteråt stängs direkt. */
+  epoch = 0;
+  openingEpoch = 0;
+  openFailedAt = 0;
+  idleClose;
   queue = Promise.resolve();
   reconnectTimer;
   stopped = false;
   constructor(deps) {
-    this.d = { idleMs: 60, replyTimeoutMs: 3e3, reconnectMs: 5e3, ...deps };
+    this.d = { version: BRIDGE_VERSION, idleMs: 60, replyTimeoutMs: 3e3, writeTimeoutMs: 1500, reconnectMs: 5e3, preopen: false, reopenAfterMs: 3e3, idleCloseMs: 0, ...deps };
     if (this.d.token) this.d.log.protect(this.d.token);
   }
   start() {
@@ -41621,12 +41751,16 @@ var DiagRelay = class {
   async stop() {
     this.stopped = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = void 0;
     try {
       this.ws?.close();
     } catch {
     }
     this.ws = null;
     await this.closeChannel();
+  }
+  get mode() {
+    return this.d.transport ?? (this.d.target ? "ble" : "serial");
   }
   scheduleReconnect(delayMs = this.d.reconnectMs) {
     if (this.stopped || this.reconnectTimer) return;
@@ -41635,6 +41769,13 @@ var DiagRelay = class {
       this.connect();
     }, delayMs);
   }
+  send(ws, message) {
+    if (ws.readyState !== wrapper_default.OPEN) return;
+    try {
+      ws.send(JSON.stringify(message));
+    } catch {
+    }
+  }
   connect() {
     if (this.stopped) return;
     const base = this.d.engineWsUrl;
@@ -41642,20 +41783,40 @@ var DiagRelay = class {
     const url2 = `${base}${sep}role=vci&session=${encodeURIComponent(this.d.session)}${this.d.token ? `&token=${encodeURIComponent(this.d.token)}` : ""}`;
     const ws = new wrapper_default(url2, { handshakeTimeout: 1e4 });
     this.ws = ws;
-    ws.on("open", () => this.d.log.info("vci-rel\xE4 anslutet till motorn", { session: this.d.session }));
+    ws.on("open", () => {
+      this.d.log.info("vci-rel\xE4 anslutet till motorn", { session: this.d.session });
+      this.send(ws, { t: "vci-hello", bridge: this.d.version, transport: this.mode, target: this.d.target ?? "" });
+      if (this.d.preopen) this.preopen();
+    });
     ws.on("message", (raw) => this.onMessage(ws, raw));
     ws.on("error", (e) => this.d.log.warn("vci-rel\xE4: anslutningsfel", { error: e.message }));
-    ws.on("close", (code) => {
+    ws.on("close", (code, reason) => {
       if (this.ws === ws) this.ws = null;
       void this.closeChannel();
       if (this.stopped) return;
+      const why = reason.toString("utf8");
+      if (code === 4400 || code === 1008 && /session/i.test(why)) {
+        this.d.log.warn("vci-rel\xE4: motorn godtar inte sessionsnamnet (vci_relay_session f\xE5r bara ha bokst\xE4ver, siffror, - och _, h\xF6gst 64 tecken); f\xF6rs\xF6ker igen om en minut", { session: this.d.session });
+        this.scheduleReconnect(Math.max(this.d.reconnectMs, SLOW_RETRY_MS));
+        return;
+      }
       if (code === 1008) {
         this.d.log.warn("vci-rel\xE4: motorn nekade bryggan (fel eller saknad token \u2013 kontrollera vci_engine_token); f\xF6rs\xF6ker igen om en minut", {});
-        this.scheduleReconnect(Math.max(this.d.reconnectMs, 6e4));
+        this.scheduleReconnect(Math.max(this.d.reconnectMs, SLOW_RETRY_MS));
+        return;
+      }
+      if (code === 4001) {
+        this.d.log.warn("vci-rel\xE4: ersatt av en annan anslutning med samma sessionsnamn (en annan brygga eller ett annat rel\xE4 anv\xE4nder sessionen); f\xF6rs\xF6ker igen om en minut", { session: this.d.session });
+        this.scheduleReconnect(Math.max(this.d.reconnectMs, SLOW_RETRY_MS));
         return;
       }
       this.d.log.info("vci-rel\xE4: fr\xE5nkopplat, \xE5teransluter", { code });
       this.scheduleReconnect();
+    });
+  }
+  preopen() {
+    void this.channel().catch((e) => {
+      this.d.log.warn("vci-rel\xE4: VCI:n gick inte att n\xE5 i f\xF6rv\xE4g \u2013 nytt f\xF6rs\xF6k vid n\xE4sta ram", { error: e instanceof Error ? e.message : String(e) });
     });
   }
   onMessage(ws, raw) {
@@ -41665,41 +41826,119 @@ var DiagRelay = class {
     } catch {
       return;
     }
+    if (m === null || typeof m !== "object") return;
+    if (m.t === "open") {
+      this.preopen();
+      return;
+    }
+    if (m.t === "close") {
+      void this.closeChannel();
+      return;
+    }
     if (m.t !== "tx") return;
-    const frame = unhex(m.hex ?? "");
+    const frame = unhex(typeof m.hex === "string" ? m.hex : "");
+    const seq = typeof m.seq === "number" && Number.isFinite(m.seq) ? m.seq : void 0;
+    const asked = typeof m.timeout === "number" && Number.isFinite(m.timeout) ? m.timeout : 0;
+    const timeoutMs = asked > 0 ? Math.min(MAX_REPLY_MS, Math.max(MIN_REPLY_MS, Math.round(asked))) : this.d.replyTimeoutMs;
+    const receivedAt = Date.now();
     this.queue = this.queue.then(async () => {
-      let reply = new Uint8Array(0);
-      try {
-        const ch = await this.channel();
-        reply = await sendReceive(ch, frame, this.d.idleMs, this.d.replyTimeoutMs);
-      } catch (e) {
-        this.d.log.warn("vci-rel\xE4: fel mot FOX500, tomt svar", { error: e instanceof Error ? e.message : String(e) });
-        await this.closeChannel();
-      }
-      if (ws.readyState === wrapper_default.OPEN) {
+      let reply = EMPTY;
+      let error62;
+      const waited = () => Date.now() - receivedAt;
+      const stale = () => waited() > timeoutMs + this.d.writeTimeoutMs;
+      const skip = () => {
+        error62 = "stale";
+        this.d.log.debug("vci-rel\xE4: ramen blev f\xF6r gammal innan den kunde skickas och skrevs inte till VCI:n", { seq, waited_ms: waited(), timeout_ms: timeoutMs });
+      };
+      if (stale()) skip();
+      else {
         try {
-          ws.send(JSON.stringify({ t: "rx", hex: hex3(reply) }));
-        } catch {
+          const ch = await this.channel();
+          if (stale()) skip();
+          else {
+            const x = await exchange(ch, frame, { idleMs: this.d.idleMs, timeoutMs, writeTimeoutMs: this.d.writeTimeoutMs });
+            reply = x.reply;
+            if (x.end === "timeout") {
+              if (reply.length === 0) error62 = "timeout";
+              this.d.log.debug("vci-rel\xE4: ingen hel svarsram i tid", { seq, timeout_ms: timeoutMs, received_bytes: x.received });
+            } else if (x.end === "write_failed") {
+              error62 = "write_failed";
+              this.d.log.warn("vci-rel\xE4: ramen gick inte att skriva till VCI:n, tomt svar", { seq });
+              await this.closeChannel();
+            }
+          }
+        } catch (e) {
+          error62 = "vci_unreachable";
+          this.d.log.warn("vci-rel\xE4: fel mot FOX500, tomt svar", { error: e instanceof Error ? e.message : String(e) });
+          await this.closeChannel();
         }
       }
+      this.touch();
+      this.send(ws, { t: "rx", ...seq !== void 0 ? { seq } : {}, hex: hex3(reply), ...error62 ? { error: error62 } : {} });
     });
   }
-  /** Öppnar VCI-kanalen lat och återanvänder den. Transport: BLE/SPP mot målet, eller serieporten. */
+  /** Öppnar VCI-kanalen (en gång, även när flera vill ha den samtidigt) och återanvänder den. Transport: BLE/SPP mot målet, eller serieporten. */
   async channel() {
     if (this.opened) return this.opened.channel;
+    if (this.opening && this.openingEpoch !== this.epoch) {
+      await this.opening.catch(() => void 0);
+      return this.channel();
+    }
+    if (!this.opening) {
+      if (this.openFailedAt !== 0 && Date.now() - this.openFailedAt < this.d.reopenAfterMs) throw new Error("VCI:n gick nyss inte att n\xE5");
+      const epoch = this.epoch;
+      this.openingEpoch = epoch;
+      this.opening = this.open().then(
+        async (opened) => {
+          this.opening = null;
+          if (epoch !== this.epoch) {
+            try {
+              await opened.close();
+            } catch {
+            }
+            throw new Error("VCI-kanalen beh\xF6vs inte l\xE4ngre");
+          }
+          this.openFailedAt = 0;
+          this.opened = opened;
+          this.d.log.info("vci-rel\xE4: VCI-kanal \xF6ppen", { via: opened.describe, transport: this.mode });
+          this.touch();
+          return opened;
+        },
+        (e) => {
+          this.opening = null;
+          if (epoch === this.epoch) this.openFailedAt = Date.now();
+          throw e;
+        }
+      );
+    }
+    return (await this.opening).channel;
+  }
+  async open() {
     const t = this.d.transports;
-    const mode = this.d.transport ?? (this.d.target ? "ble" : "serial");
-    let opened;
-    if (mode === "ble") opened = await t.openBluetooth(this.d.target ?? "");
-    else if (mode === "spp") {
+    const mode = this.mode;
+    if (mode === "ble") return t.openBluetooth(this.d.target ?? "");
+    if (mode === "spp") {
       if (!t.openSpp) throw new Error("SPP st\xF6ds inte av den h\xE4r bryggan");
-      opened = await t.openSpp(this.d.target ?? "");
-    } else opened = await t.openSerial();
-    this.opened = opened;
-    this.d.log.info("vci-rel\xE4: VCI-kanal \xF6ppen", { via: opened.describe, transport: mode });
-    return opened.channel;
+      return t.openSpp(this.d.target ?? "");
+    }
+    return t.openSerial();
+  }
+  /** En ram har just gått (eller kanalen har just öppnats): skjut fram den valfria stängningen vid tystnad. */
+  touch() {
+    if (this.idleClose) clearTimeout(this.idleClose);
+    this.idleClose = void 0;
+    if (this.d.idleCloseMs > 0 && this.opened) {
+      this.idleClose = setTimeout(() => {
+        this.idleClose = void 0;
+        this.d.log.info("vci-rel\xE4: inga ramar p\xE5 ett tag, VCI-kanalen st\xE4ngs tills n\xE4sta ram", {});
+        void this.closeChannel();
+      }, this.d.idleCloseMs);
+    }
   }
   async closeChannel() {
+    this.epoch++;
+    if (this.idleClose) clearTimeout(this.idleClose);
+    this.idleClose = void 0;
     const o = this.opened;
     this.opened = null;
     if (o) {
