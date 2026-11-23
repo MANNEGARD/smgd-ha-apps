@@ -66,9 +66,13 @@ configuration:
     description: >-
       Sessionen som relät ansluter till; måste vara samma som i fliken "Diagnostik (motor)". Standard "default".
   vci_relay_target:
-    name: FOX500 Bluetooth-mål
+    name: VCI Bluetooth-mål
     description: >-
-      FOX500:ans namn eller MAC för klassisk Bluetooth (SPP). Lämna tomt för att använda serieporten ovan i stället.
+      VCI:ns Bluetooth-namn (som visas vid parkoppling, t.ex. i80TS…) eller MAC. Lämna tomt för att använda serieporten ovan i stället.
+  vci_relay_transport:
+    name: VCI-anslutning
+    description: >-
+      Hur relät når VCI:n: BLE (Bluetooth-namnet ovan – det de flesta Foxwell-VCI:er använder), SPP (klassisk Bluetooth) eller Serial (porten ovan). Lämna tomt för BLE när ett mål är satt. Om BLE ansluter men diagnostiksvaren ser fel ut, prova SPP.
 
   vci_engine_token:
     name: Motortoken

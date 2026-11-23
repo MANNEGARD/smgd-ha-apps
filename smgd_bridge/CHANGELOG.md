@@ -1,5 +1,12 @@
 # Ändringslogg
 
+## 0.1.18
+
+- **Välj hur reläet når VCI:n:** nytt fält *VCI-anslutning* (`vci_relay_transport`: `ble`, `spp` eller `serial`).
+  Standard är BLE när ett Bluetooth-mål är satt (VCI:ns namn, t.ex. i80TS…), annars serieporten. Tidigare öppnade
+  diagnostikreläet bara SPP/serie och nådde aldrig en VCI som bara syns över BLE. Ger BLE svar som motorn inte
+  förstår, prova SPP.
+
 ## 0.1.17
 
 - **Motortoken i inställningarna:** den delade token för diagnostikrelät anges nu i fältet *Motortoken*
@@ -20,9 +27,9 @@
 ## 0.1.15
 
 - **Paritet med direktanslutningen:** tre nya VCI-jobb så bryggan kan göra samma saker som webbläsaren mot
-  en direktansluten enhet — terminal (skicka ett AT-kommando till modulen eller en FX-ram och få svaret,
-  skicka→svar), läs pin-spänning på angivna stift, och sätt Bluetooth-namnet (klassiskt och BLE). Bryggan
-  annonserar nu vilka jobbtyper den stödjer, så Developer Lab bara erbjuder det den här versionen klarar.
+  en direktansluten enhet — `raw_command` (terminal: skicka ett AT-kommando till modulen eller en FX-ram
+  och få svaret, skicka→svar), `pin_voltage` (läs pin-spänning på angivna stift) och `write_bt_name` (sätt
+  Bluetooth-namnet, både klassiskt och BLE). Bryggan annonserar nu vilka jobbtyper den stödjer.
 
 ## 0.1.14
 

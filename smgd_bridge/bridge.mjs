@@ -20662,6 +20662,7 @@ function loadConfig(env = process.env) {
     vci_engine_ws: (typeof raw.vci_engine_ws === "string" && raw.vci_engine_ws.trim() !== "" ? raw.vci_engine_ws.trim() : void 0) ?? fromEnv("SMGD_VCI_ENGINE_WS"),
     vci_relay_session: (typeof raw.vci_relay_session === "string" && raw.vci_relay_session.trim() !== "" ? raw.vci_relay_session.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_SESSION"),
     vci_relay_target: (typeof raw.vci_relay_target === "string" && raw.vci_relay_target.trim() !== "" ? raw.vci_relay_target.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_TARGET"),
+    vci_relay_transport: (typeof raw.vci_relay_transport === "string" && raw.vci_relay_transport.trim() !== "" ? raw.vci_relay_transport.trim() : void 0) ?? fromEnv("SMGD_VCI_RELAY_TRANSPORT"),
     // an empty password field means "no token here" (the file or SMGD_VCI_TOKEN may still give one)
     vci_engine_token: typeof raw.vci_engine_token === "string" && raw.vci_engine_token.trim() !== "" ? raw.vci_engine_token.trim() : void 0
   };
@@ -20702,6 +20703,7 @@ function loadConfig(env = process.env) {
     vciEngineWs: o.vci_engine_ws ?? null,
     vciRelaySession: o.vci_relay_session,
     vciRelayTarget: o.vci_relay_target ?? null,
+    vciRelayTransport: o.vci_relay_transport,
     vciEngineToken: o.vci_engine_token ?? null,
     aresBinDir: existsSync(`${aresDir}/ares-install`) ? aresDir : null,
     homeAssistant: supervisor ? { url: fromEnv("SMGD_HA_URL") ?? "http://supervisor/core/api", wsUrl: fromEnv("SMGD_HA_WS_URL") ?? "ws://supervisor/core/websocket", token: supervisor } : null,
@@ -20715,7 +20717,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.17";
+    BRIDGE_VERSION = "0.1.18";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -20780,6 +20782,8 @@ var init_config = __esm({
       vci_relay_session: external_exports.string().min(1).max(64).default("default"),
       /** SPP target (name or MAC) for the FOX500; empty uses the configured serial port instead. */
       vci_relay_target: external_exports.string().max(200).optional(),
+      /** How the relay reaches the VCI: ble (its Bluetooth name), spp (classic Bluetooth) or serial. Default: ble when a target is set, else serial. */
+      vci_relay_transport: external_exports.enum(["ble", "spp", "serial"]).optional(),
       /** The engine's shared token (SMGD_VCI_TOKEN on the VPS), as a masked password field in Home Assistant. Never logged. */
       vci_engine_token: external_exports.string().min(16).max(512).regex(/^\S+$/, "must not contain spaces").optional()
     });
@@ -41680,13 +41684,19 @@ var DiagRelay = class {
       }
     });
   }
-  /** Öppnar FOX500-kanalen lat och återanvänder den. SPP mot målet om satt, annars serieporten. */
+  /** Öppnar VCI-kanalen lat och återanvänder den. Transport: BLE/SPP mot målet, eller serieporten. */
   async channel() {
     if (this.opened) return this.opened.channel;
     const t = this.d.transports;
-    const opened = this.d.target && t.openSpp ? await t.openSpp(this.d.target) : await t.openSerial();
+    const mode = this.d.transport ?? (this.d.target ? "ble" : "serial");
+    let opened;
+    if (mode === "ble") opened = await t.openBluetooth(this.d.target ?? "");
+    else if (mode === "spp") {
+      if (!t.openSpp) throw new Error("SPP st\xF6ds inte av den h\xE4r bryggan");
+      opened = await t.openSpp(this.d.target ?? "");
+    } else opened = await t.openSerial();
     this.opened = opened;
-    this.d.log.info("vci-rel\xE4: FOX500-kanal \xF6ppen", { via: opened.describe });
+    this.d.log.info("vci-rel\xE4: VCI-kanal \xF6ppen", { via: opened.describe, transport: mode });
     return opened.channel;
   }
   async closeChannel() {
@@ -42781,7 +42791,8 @@ var Bridge2 = class {
         engineWsUrl: this.config.vciEngineWs,
         token: this.vciRelayToken(),
         session: this.config.vciRelaySession ?? "default",
-        target: this.config.vciRelayTarget ?? null
+        target: this.config.vciRelayTarget ?? null,
+        transport: this.config.vciRelayTransport
       });
       this.diagRelay.start();
     }

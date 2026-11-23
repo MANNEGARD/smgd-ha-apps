@@ -66,9 +66,13 @@ configuration:
     description: >-
       The session the relay joins; must match the one chosen in the "Diagnostik (motor)" tab. Default "default".
   vci_relay_target:
-    name: FOX500 Bluetooth target
+    name: VCI Bluetooth target
     description: >-
-      The FOX500's name or MAC for classic Bluetooth (SPP). Leave empty to use the serial port above instead.
+      The VCI's Bluetooth name (as shown when pairing, e.g. i80TS…) or MAC. Leave empty to use the serial port above instead.
+  vci_relay_transport:
+    name: VCI connection
+    description: >-
+      How the relay reaches the VCI: BLE (the Bluetooth name above – what most Foxwell VCIs use), SPP (classic Bluetooth) or Serial (the port above). Leave empty for BLE when a target is set. If BLE connects but the diagnostic answers look wrong, try SPP.
   vci_engine_token:
     name: Engine token
     description: >-
