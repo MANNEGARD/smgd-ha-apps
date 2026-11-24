@@ -1,5 +1,11 @@
 # Ändringslogg
 
+## 0.1.20
+
+- **Rätt Bluetooth-kanal (BLE):** bryggan använder nu Feasycoms datatjänst
+  (00002760-08c2-11e1-9073-0e8ac72e1000, skriv …0001, svar …0002) – den som Foxwells egen app (i80II) använder mot VCI:n.
+  Tidigare valdes FFF0, där VCI:n inte svarar på sitt protokoll. FFF0 finns kvar som reserv för andra moduler.
+
 ## 0.1.19
 
 - **Diagnostikrelät tar emot hela svar:** svaret från VCI:n skickas vidare när en hel svarsram har kommit, i
@@ -17,10 +23,8 @@
 
 ## 0.1.18
 
-- **Välj hur reläet når VCI:n:** nytt fält *VCI-anslutning* (`vci_relay_transport`: `ble`, `spp` eller `serial`).
-  Standard är BLE när ett Bluetooth-mål är satt (VCI:ns namn, t.ex. i80TS…), annars serieporten. Tidigare öppnade
-  diagnostikreläet bara SPP/serie och nådde aldrig en VCI som bara syns över BLE. Ger BLE svar som motorn inte
-  förstår, prova SPP.
+- **Diagnostikrelät når VCI:n över BLE:** anslutningssättet väljs med `vci_relay_transport` (BLE, SPP eller
+  serieport). Standard är BLE när ett Bluetooth-mål är angivet – samma väg som bryggans vanliga VCI-jobb.
 
 ## 0.1.17
 

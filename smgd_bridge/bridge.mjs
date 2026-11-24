@@ -20717,7 +20717,7 @@ var init_config = __esm({
     "use strict";
     init_zod();
     init_net();
-    BRIDGE_VERSION = "0.1.19";
+    BRIDGE_VERSION = "0.1.20";
     STATUS_MAX_AGE_MS = 12e4;
     STATUS_FILE = "status.json";
     DEFAULT_ALLOWED_NETWORKS = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "fc00::/7", "fe80::/10"];
@@ -38692,6 +38692,20 @@ function encodeReadPinVoltage(pin, seq) {
   const s = seq.take();
   return { bytes: buildRequest(s, CMD.GET_PIN_VOLTAGE, pinVoltagePayload(pin)), seq: s, command: CMD.GET_PIN_VOLTAGE };
 }
+function batteryVoltagePayload() {
+  return [0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0];
+}
+function encodeReadBatteryVoltage(seq) {
+  const s = seq.take();
+  return { bytes: buildRequest(s, CMD.GET_PIN_VOLTAGE, batteryVoltagePayload()), seq: s, command: CMD.GET_PIN_VOLTAGE };
+}
+function decodeBatteryVoltage(data) {
+  if (data.length < 8) return null;
+  const le = (at) => (data[at] | data[at + 1] << 8 | data[at + 2] << 16 | data[at + 3] << 24) >>> 0;
+  if (le(0) !== 4) return null;
+  const millivolts = le(4);
+  return { millivolts, volts: Math.round(millivolts / 100) / 10 };
+}
 var SERIAL_LENGTH = 13;
 function isValidSerial(serial) {
   return serial.length === SERIAL_LENGTH && /^[A-Za-z0-9]+$/.test(serial);
@@ -38700,6 +38714,19 @@ function encodeWriteSerial(serial, seq) {
   if (!isValidSerial(serial)) throw new RangeError("a serial number is exactly 13 letters and digits");
   const s = seq.take();
   return { bytes: buildRequest(s, CMD.SET_SERIAL, asciiBytes(serial)), seq: s, command: CMD.SET_SERIAL };
+}
+function encodeReadExtInfo(seq) {
+  const s = seq.take();
+  return { bytes: buildRequest(s, CMD.GET_EXT_INFO), seq: s, command: CMD.GET_EXT_INFO };
+}
+function encodeReadFlag90(seq) {
+  const s = seq.take();
+  return { bytes: buildRequest(s, CMD.READ_FLAG_90), seq: s, command: CMD.READ_FLAG_90 };
+}
+function encodeDumpParamBlock(which, seq) {
+  const command = which === "sealed" ? CMD.DUMP_SEALED_BLOCK : CMD.DUMP_WORK_PAGE;
+  const s = seq.take();
+  return { bytes: buildRequest(s, command), seq: s, command };
 }
 function encodePlain(command, payload, seq) {
   return { bytes: buildRequest(seq, command, payload), seq: seq & 255, command };
@@ -38845,8 +38872,14 @@ var VciLink = class {
   onUnsolicited = null;
   /** Every chunk of bytes received, exactly as it came – frames, noise and all (for a raw log). Receive side only. */
   onBytes = null;
+  /**
+   * Runs in the queue before each send (a request or raw bytes). On a channel shared with the Bluetooth
+   * module's AT engine it closes the engine first, so that the device gets the frame.
+   */
+  beforeWrite;
   constructor(channel, options = {}) {
     this.channel = channel;
+    this.beforeWrite = options.beforeWrite ?? null;
     this.clock = options.clock ?? realClock;
     this.log = options.log ?? (() => void 0);
     this.channelName = options.channelName ?? "usb";
@@ -38948,6 +38981,7 @@ var VciLink = class {
       return Promise.reject(e);
     }
     return this.enqueue(async () => {
+      await this.beforeWrite?.();
       this.startAfresh();
       this.log({ at: this.clock.now(), kind: "tx", channel: this.channelName, text: toHex2(bytes), bytes, ...bytes.length >= 5 && bytes[0] === 70 && bytes[1] === 88 ? { seq: bytes[4] } : {} });
       try {
@@ -38966,6 +39000,7 @@ var VciLink = class {
       return Promise.reject(e);
     }
     return this.enqueue(async () => {
+      await this.beforeWrite?.();
       const timeoutMs = options.timeoutMs ?? 3e3;
       const attempts = 1 + (options.retries ?? 0);
       for (let attempt = 1; attempt <= attempts; attempt++) {
@@ -39136,12 +39171,23 @@ var AtEngine = class _AtEngine {
   open() {
     return this.serial(() => this.openUnlocked());
   }
+  /**
+   * Closes the AT engine, so that the module passes data through to the device again (on a channel the
+   * protocol and AT share, the device's frames get no answer while the engine is open). Waits briefly for
+   * `$OK,Closed$`; silence is not a failure (some firmware says nothing).
+   */
   closeEngine() {
     return this.serial(async () => {
+      const wait = this.until((t) => t.includes("$OK,Closed$") ? { done: true } : null, 800);
       await this.write(AT_CLOSE);
+      await wait;
       this.opened = false;
       this.engine = "closed";
     });
+  }
+  /** Whether the engine was opened here (commands go without opening it first) and not closed since. */
+  get isOpen() {
+    return this.opened;
   }
   /** Reads what the module sent for one command: its lines, its value line, OK, ERROR. Only whole lines count. */
   static parse(received, name) {
@@ -39202,6 +39248,97 @@ var AtEngine = class _AtEngine {
   }
 };
 
+// ../../packages/vci-protocol/src/param-block.ts
+var MAGIC2 = "FOXWELLVERYGOOD";
+var CRC_OFF = 512;
+var MAGIC_OFF = 528;
+var BLOCK_LEN = 512;
+var OFF = {
+  mode: 0,
+  madeDate: 18,
+  type: 34,
+  fwLength: 100,
+  fwCrc: 104,
+  flag90: 144,
+  appVersion: 160,
+  bootVersion: 176,
+  flagC0: 192,
+  key: 208,
+  serial: 225
+};
+var KEY_LEN = 17;
+var CRC_TABLE2 = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+function crc32(data) {
+  let c = 4294967295;
+  for (let i = 0; i < data.length; i++) c = CRC_TABLE2[(c ^ data[i]) & 255] ^ c >>> 8;
+  return (c ^ 4294967295) >>> 0;
+}
+var MODE_NAME = { 2: "app", 3: "ageing", 4: "tooling", 5: "boot" };
+var asciiAt = (b, start, max2) => {
+  let s = "";
+  for (let i = start; i < start + max2 && i < b.length; i++) {
+    const c = b[i];
+    if (c === 0) break;
+    if (c < 32 || c > 126) break;
+    s += String.fromCharCode(c);
+  }
+  return s;
+};
+var toHex3 = (b) => Array.from(b, (x) => x.toString(16).padStart(2, "0").toUpperCase()).join("");
+var PARAM_TYPE_MAX = 32;
+var PARAM_SERIAL_MAX = 32;
+var TYPE_ROOM = OFF.appVersion - (OFF.type + 1);
+var BLOCK_SPAN = MAGIC_OFF + MAGIC2.length;
+function lengthPrefixed(b, at, cap) {
+  const len = b[at] ?? 0;
+  if (len > 0 && len <= cap && at + 1 + len <= b.length) {
+    const s = asciiAt(b, at + 1, len);
+    if (s.length === len) return s;
+  }
+  return asciiAt(b, at + 1, cap);
+}
+var u32At = (b, at) => ((b[at] ?? 0) | (b[at + 1] ?? 0) << 8 | (b[at + 2] ?? 0) << 16 | (b[at + 3] ?? 0) << 24) >>> 0;
+function readParamBlockDump(dump) {
+  const modeByte = dump[OFF.mode] ?? 0;
+  const hasSeal = dump.length >= MAGIC_OFF + MAGIC2.length;
+  let storedCrc = null;
+  let computedCrc = null;
+  let magicOk = null;
+  let valid = null;
+  if (hasSeal) {
+    storedCrc = u32At(dump, CRC_OFF);
+    computedCrc = crc32(dump.subarray(0, BLOCK_LEN));
+    magicOk = Array.from(MAGIC2).every((c, i) => dump[MAGIC_OFF + i] === c.charCodeAt(0));
+    valid = magicOk && storedCrc === computedCrc;
+  }
+  return {
+    modeByte,
+    mode: MODE_NAME[modeByte] ?? null,
+    type: lengthPrefixed(dump, OFF.type, PARAM_TYPE_MAX),
+    serial: asciiAt(dump, OFF.serial, PARAM_SERIAL_MAX),
+    madeDate: lengthPrefixed(dump, OFF.madeDate, 15),
+    appVersion: lengthPrefixed(dump, OFF.appVersion, 16),
+    bootVersion: lengthPrefixed(dump, OFF.bootVersion, 16),
+    firmwareLength: u32At(dump, OFF.fwLength),
+    firmwareCrc: u32At(dump, OFF.fwCrc),
+    flag90: dump[OFF.flag90] ?? 255,
+    flagC0: dump[OFF.flagC0] ?? 255,
+    keyHex: toHex3(dump.subarray(OFF.key, OFF.key + KEY_LEN)),
+    storedCrc,
+    computedCrc,
+    magicOk,
+    valid
+  };
+}
+
 // ../../packages/vci-protocol/src/operations.ts
 function isSilentDevice(info) {
   return info.modeRead.kind === "silent" && Object.values(info.reads).every((r2) => r2?.kind === "silent");
@@ -39233,7 +39370,7 @@ var STATUS_OF = {
   wrong_mode: "failed",
   rejected: "failed"
 };
-var MODE_NAME = { boot: "BOOT", app: "APP", ageing: "AGEING", tooling: "TOOLING" };
+var MODE_NAME2 = { boot: "BOOT", app: "APP", ageing: "AGEING", tooling: "TOOLING" };
 var ERROR_APP_JUMP_FAILED = 131092;
 var hexStatus = (s) => s === null ? "saknas" : `0x${(s >>> 0).toString(16).toUpperCase().padStart(8, "0")}`;
 var statusText = (s) => `${hexStatus(s)}${s === ERROR_APP_JUMP_FAILED ? " (bootladdaren kunde inte starta firmware, ERROR_APP_JUMP_FAILED)" : ""}`;
@@ -39369,6 +39506,34 @@ var VciSession = class _VciSession {
       return { volts: Math.round(mv / 10) / 100, millivolts: mv, pin };
     });
   }
+  /**
+   * The battery/OBD voltage, the app's second {10,0} (VehicleLauncher.m): a 12-byte request [0,3,0], the answer
+   * (after the status word) is [length=4][millivolts] → volts. A different reading from the pin voltage above.
+   */
+  async readBatteryVoltage(owner) {
+    const frame = await this.ask(() => encodeReadBatteryVoltage(this.seq), { timeoutMs: this.timings.readTimeoutMs, retries: 0, label: "batterisp\xE4nning", owner });
+    return _VciSession.classify(frame, (d) => decodeBatteryVoltage(d));
+  }
+  /**
+   * The whole parameter block, read straight from the device. Firmware-only commands: DUMP_WORK_PAGE {6,15}
+   * (the work copy @0x18000, what the device uses at runtime) and DUMP_SEALED_BLOCK {7,15} (the sealed master
+   * @0x5A000). The answer is the raw block; it holds the serial, versions, dates, flags and the key/sig field.
+   * Not tried on a real device – mark it so where it is shown.
+   */
+  async readParamBlockFromDevice(which = "sealed", owner) {
+    const frame = await this.ask(() => encodeDumpParamBlock(which, this.seq), { timeoutMs: this.timings.readTimeoutMs, retries: 0, label: `parameterblock (${which})`, owner });
+    return _VciSession.classify(frame, (d) => d.length >= 225 ? readParamBlockDump(d) : null);
+  }
+  /** The extended info block, firmware-only {11,1}; the structure is not mapped, so the data is returned as hex. */
+  async readExtInfoOutcome(owner) {
+    const frame = await this.ask(() => encodeReadExtInfo(this.seq), { timeoutMs: this.timings.readTimeoutMs, retries: 0, label: "ut\xF6kad info", owner });
+    return _VciSession.classify(frame, (d) => d.length > 0 ? toHex2(d) : null);
+  }
+  /** The one-byte flag at parameter-block field 0x90, firmware-only {0,15}; returned as hex (meaning unknown). */
+  async readFlag90Outcome(owner) {
+    const frame = await this.ask(() => encodeReadFlag90(this.seq), { timeoutMs: this.timings.readTimeoutMs, retries: 0, label: "flagga 0x90", owner });
+    return _VciSession.classify(frame, (d) => d.length > 0 ? toHex2(d.subarray(0, 1)) : null);
+  }
   /** The processor type, as the app shows it: the answer's data bytes as hex. */
   async readIcTypeOutcome(owner) {
     const frame = await this.ask(() => encodePlain(CMD.GET_IC_TYPE, [0], this.seq.take()), { timeoutMs: this.timings.readTimeoutMs, retries: 0, label: "IC-typ", owner });
@@ -39484,8 +39649,8 @@ var VciSession = class _VciSession {
   }
   modeResult(target, acknowledged, ackStatus, attempts, seen, windowMs) {
     const outcome = _VciSession.judge(target, acknowledged, ackStatus, seen);
-    const T = MODE_NAME[target];
-    const now2 = seen.mode ? MODE_NAME[seen.mode] : null;
+    const T = MODE_NAME2[target];
+    const now2 = seen.mode ? MODE_NAME2[seen.mode] : null;
     const inferredNote = "Enheten svarar inte p\xE5 l\xE4gesfr\xE5gan, s\xE5 l\xE4get \xE4r en slutsats, inte bekr\xE4ftat av enheten.";
     let message;
     switch (outcome) {
@@ -39583,7 +39748,7 @@ var VciSession = class _VciSession {
    * when nothing could be sent at all ('disconnected') or the link is taken by something else.
    */
   async switchMode(target, owner) {
-    const own2 = owner ?? `byte till ${MODE_NAME[target]}-l\xE4ge`;
+    const own2 = owner ?? `byte till ${MODE_NAME2[target]}-l\xE4ge`;
     const release = owner ? null : this.link.acquire(own2);
     try {
       return target === "boot" ? await this.enterBoot(own2) : await this.enterApp(own2);
@@ -40117,21 +40282,8 @@ function fxRequestSeq(frame) {
   return frame.length >= 10 && frame[0] === 70 && frame[1] === 88 ? frame[4] : null;
 }
 
-// ../../packages/vci-protocol/src/param-block.ts
-var MAGIC2 = "FOXWELLVERYGOOD";
-var MAGIC_OFF = 528;
-var OFF = { mode: 0, type: 34, appVersion: 160, bootVersion: 176, key: 208, serial: 225 };
-var CRC_TABLE2 = (() => {
-  const table = new Uint32Array(256);
-  for (let n = 0; n < 256; n++) {
-    let c = n;
-    for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
-    table[n] = c >>> 0;
-  }
-  return table;
-})();
-var TYPE_ROOM = OFF.appVersion - (OFF.type + 1);
-var BLOCK_SPAN = MAGIC_OFF + MAGIC2.length;
+// ../../packages/vci-protocol/src/relay-exchange.ts
+var EMPTY = new Uint8Array(0);
 
 // src/drivers/vci/ble-channel.ts
 var BleChannel = class {
@@ -40199,6 +40351,10 @@ var uuid16 = (short2) => `0000${short2}-0000-1000-8000-00805f9b34fb`;
 var VCI_BLE_SERVICE = uuid16("fff0");
 var VCI_BLE_NOTIFY = uuid16("fff1");
 var VCI_BLE_WRITE = uuid16("fff2");
+var VCI_BLE_PROFILES = [
+  { name: "Feasycom", service: "00002760-08c2-11e1-9073-0e8ac72e1000", notify: "00002760-08c2-11e1-9073-0e8ac72e0002", write: "00002760-08c2-11e1-9073-0e8ac72e0001" },
+  { name: "FFF0", service: VCI_BLE_SERVICE, notify: VCI_BLE_NOTIFY, write: VCI_BLE_WRITE }
+];
 var WRITE_CHUNK = 20;
 var CALL_TIMEOUT_MS = 2e4;
 var sleep3 = (ms) => new Promise((r2) => setTimeout(r2, ms));
@@ -40330,11 +40486,16 @@ var BluezCentral = class {
       }
       const objects = await this.objects();
       const under = Object.entries(objects).filter(([p]) => p.startsWith(`${device.path}/`));
-      const service = under.find(([, i]) => String(i["org.bluez.GattService1"]?.UUID?.value ?? "").toLowerCase() === VCI_BLE_SERVICE)?.[0];
-      const characteristic = (uuid3) => under.find(([p, i]) => service !== void 0 && p.startsWith(`${service}/`) && String(i["org.bluez.GattCharacteristic1"]?.UUID?.value ?? "").toLowerCase() === uuid3)?.[0];
-      const notifyPath = characteristic(VCI_BLE_NOTIFY);
-      const writePath = characteristic(VCI_BLE_WRITE);
-      if (!service || !notifyPath || !writePath) throw new VciError("wrong_device", `Enheten ${name} har inte den datakanal (FFF0/FFF1/FFF2) som VCI:ns Bluetooth-modul anv\xE4nder.`);
+      const serviceOf = (uuid3) => under.find(([, i]) => String(i["org.bluez.GattService1"]?.UUID?.value ?? "").toLowerCase() === uuid3)?.[0];
+      const charOf = (service2, uuid3) => under.find(([p, i]) => service2 !== void 0 && p.startsWith(`${service2}/`) && String(i["org.bluez.GattCharacteristic1"]?.UUID?.value ?? "").toLowerCase() === uuid3)?.[0];
+      const found = VCI_BLE_PROFILES.map((pr) => {
+        const sv = serviceOf(pr.service);
+        return { sv, n: charOf(sv, pr.notify), w: charOf(sv, pr.write) };
+      }).find((x) => x.sv && x.n && x.w);
+      const service = found?.sv;
+      const notifyPath = found?.n;
+      const writePath = found?.w;
+      if (!service || !notifyPath || !writePath) throw new VciError("wrong_device", `Enheten ${name} har ingen av de datakanaler (Feasycom 2760 eller FFF0/FFF1/FFF2) som VCI:ns Bluetooth-modul anv\xE4nder.`);
       const writeFlags = objects[writePath]?.["org.bluez.GattCharacteristic1"]?.Flags?.value ?? [];
       const writeType = writeFlags.includes("write") || !writeFlags.includes("write-without-response") ? "request" : "command";
       const listeners = /* @__PURE__ */ new Set();
@@ -41680,13 +41841,13 @@ var unhex = (s) => {
   for (let i = 0; i < o.length; i++) o[i] = parseInt(t.substr(2 * i, 2), 16);
   return o;
 };
-var EMPTY = new Uint8Array(0);
+var EMPTY2 = new Uint8Array(0);
 function exchange(channel, req, o) {
   return new Promise((resolve) => {
     const seq = fxRequestSeq(req);
     const timers = {};
     const listener = {};
-    let buf = EMPTY;
+    let buf = EMPTY2;
     let settled = false;
     const finish = (reply, end) => {
       if (settled) return;
@@ -41715,14 +41876,14 @@ function exchange(channel, req, o) {
       listener.off();
       return;
     }
-    timers.write = setTimeout(() => finish(EMPTY, "write_failed"), o.writeTimeoutMs);
+    timers.write = setTimeout(() => finish(EMPTY2, "write_failed"), o.writeTimeoutMs);
     Promise.resolve().then(() => channel.write(req)).then(
       () => {
         clearTimeout(timers.write);
         if (settled) return;
-        timers.hard = setTimeout(() => finish(seq !== null ? EMPTY : buf, "timeout"), o.timeoutMs);
+        timers.hard = setTimeout(() => finish(seq !== null ? EMPTY2 : buf, "timeout"), o.timeoutMs);
       },
-      () => finish(EMPTY, "write_failed")
+      () => finish(EMPTY2, "write_failed")
     );
   });
 }
@@ -41842,7 +42003,7 @@ var DiagRelay = class {
     const timeoutMs = asked > 0 ? Math.min(MAX_REPLY_MS, Math.max(MIN_REPLY_MS, Math.round(asked))) : this.d.replyTimeoutMs;
     const receivedAt = Date.now();
     this.queue = this.queue.then(async () => {
-      let reply = EMPTY;
+      let reply = EMPTY2;
       let error62;
       const waited = () => Date.now() - receivedAt;
       const stale = () => waited() > timeoutMs + this.d.writeTimeoutMs;
